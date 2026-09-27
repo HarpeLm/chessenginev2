@@ -1191,6 +1191,16 @@ function renderMeasure() {
   toggle.textContent = running ? "Arrêter" : "Démarrer";
   toggle.disabled = !running && !state.stockfish;
   for (const id of ["#m-elo", "#m-count", "#m-tc"]) $(id).disabled = running;
+  // Pendant une mesure, les réglages affichés sont ceux de la mesure en cours.
+  if (running && state.current) {
+    const current = state.current;
+    const setIfPresent = (id, value) => {
+      if ([...$(id).options].some((o) => o.value === value)) $(id).value = value;
+    };
+    setIfPresent("#m-elo", String(current.opponent_elo));
+    setIfPresent("#m-count", String(current.games));
+    setIfPresent("#m-tc", `${current.base_ms}/${current.increment_ms}`);
+  }
 
   if (run) {
     const n = played(run.wdl);
