@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>chessengine</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Jost:wght@300;400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="2.5" y="2.5" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1"/>
+        <rect x="2.5" y="2.5" width="9.5" height="9.5" fill="currentColor" opacity=".35"/>
+        <rect x="12" y="12" width="9.5" height="9.5" fill="currentColor" opacity=".35"/>
+      </svg>
+      <span class="brand-name">chessengine</span>
+    </div>
+    <nav class="tabs" role="tablist">
+      <button class="tab is-active" data-view="play" role="tab">Partie</button>
+      <button class="tab" data-view="train" role="tab">Entraînement</button>
+    </nav>
+    <div class="topbar-status" id="topbar-status"></div>
+  </header>
+
+  <!-- ─────────────── Partie ─────────────── -->
+  <main class="view view-play" id="view-play">
+    <section class="board-column">
+      <div class="player-row" id="player-top"></div>
+      <div class="board-frame">
+        <div class="evalbar" id="evalbar" aria-hidden="true">
+          <div class="evalbar-fill" id="evalbar-fill"></div>
+          <span class="evalbar-label" id="evalbar-label"></span>
+        </div>
+        <div class="board-holder">
+          <div class="board" id="board"></div>
+          <div class="result-plaque" id="result" hidden>
+            <p class="result-title" id="result-title"></p>
+            <p class="result-detail" id="result-detail"></p>
+            <button class="button button-primary" id="result-again">Nouvelle partie</button>
+          </div>
+        </div>
+      </div>
+      <div class="player-row" id="player-bottom"></div>
+    </section>
+
+    <aside class="side">
+      <section class="panel engine-panel">
+        <header class="panel-head">
+          <h2 class="eyebrow">Réflexion du moteur</h2>
+          <span class="thinking-dot" id="thinking-dot" hidden></span>
+        </header>
+        <div class="eval-line">
+          <span class="eval-big" id="eval-big">0.00</span>
+          <span class="eval-caption" id="eval-caption">en attente</span>
+        </div>
+        <dl class="stats">
+          <div><dt>Profondeur</dt><dd id="st-depth">–</dd></div>
+          <div><dt>Positions</dt><dd id="st-nodes">–</dd></div>
+          <div><dt>Vitesse</dt><dd id="st-nps">–</dd></div>
+          <div><dt>Temps</dt><dd id="st-time">–</dd></div>
+        </dl>
+        <div class="pv">
+          <span class="pv-label">Ligne principale</span>
+          <p class="pv-moves" id="pv">–</p>
+        </div>
+      </section>
+
+      <section class="panel moves-panel">
+        <header class="panel-head"><h2 class="eyebrow">Coups</h2></header>
+        <ol class="moves" id="moves"></ol>
+      </section>
+
+      <section class="panel controls">
+        <div class="control-row">
+          <span class="control-label">Jouer avec</span>
+          <div class="segmented" id="color-choice">
+            <button data-color="white" class="is-active">Blancs</button>
+            <button data-color="black">Noirs</button>
+            <button data-color="random">Hasard</button>
+          </div>
+        </div>
+        <div class="control-row">
+          <label class="control-label" for="think">Temps de réflexion</label>
+          <div class="range-wrap">
+            <input type="range" id="think" min="0" max="7" step="1" value="3">
+            <output id="think-out">2 s</output>
+          </div>
+        </div>
+        <div class="button-row">
+          <button class="button button-primary" id="new-game">Nouvelle partie</button>
+          <button class="button" id="undo">Annuler</button>
+          <button class="button button-icon" id="flip" title="Retourner l'échiquier" aria-label="Retourner l'échiquier">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v14m0 0-3-3m3 3 3-3M17 20V6m0 0-3 3m3-3 3 3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <!-- ─────────────── Entraînement ─────────────── -->
+  <main class="view view-train" id="view-train" hidden>
+    <section class="train-head">
+      <div class="train-intro">
+        <h1 class="display">Apprentissage</h1>
+        <p class="lede">Le moteur joue contre lui-même, ajuste son évaluation à partir des résultats, puis la nouvelle version affronte l’ancienne. Elle ne devient champion que si elle gagne le match.</p>
+      </div>
+      <dl class="kpis">
+        <div class="kpi"><dt>Génération</dt><dd id="kpi-gen">0</dd></div>
+        <div class="kpi"><dt>ELO mesuré</dt><dd id="kpi-elo">+0</dd></div>
+        <div class="kpi"><dt>Parties jouées</dt><dd id="kpi-games">0</dd></div>
+        <div class="kpi"><dt>Positions en mémoire</dt><dd id="kpi-data">0</dd></div>
+      </dl>
+    </section>
+
+    <section class="train-bar">
+      <ol class="pipeline" id="pipeline">
+        <li data-phase="selfplay"><span class="step-n">1</span><span class="step-name">Parties</span><span class="step-bar"><i></i></span></li>
+        <li data-phase="tuning"><span class="step-n">2</span><span class="step-name">Ajustement</span><span class="step-bar"><i></i></span></li>
+        <li data-phase="match"><span class="step-n">3</span><span class="step-name">Match</span><span class="step-bar"><i></i></span></li>
+        <li data-phase="verify"><span class="step-n">4</span><span class="step-name">Vérification</span><span class="step-bar"><i></i></span></li>
+      </ol>
+      <div class="train-controls">
+        <label class="select-wrap">
+          <span>Parties</span>
+          <select id="cfg-games">
+            <option value="32">32</option>
+            <option value="64">64</option>
+            <option value="96" selected>96</option>
+            <option value="192">192</option>
+            <option value="384">384</option>
+          </select>
+        </label>
+        <label class="select-wrap">
+          <span>Réflexion</span>
+          <select id="cfg-nodes">
+            <option value="1500">Éclair</option>
+            <option value="4000" selected>Rapide</option>
+            <option value="12000">Posée</option>
+            <option value="40000">Profonde</option>
+          </select>
+        </label>
+        <button class="button button-primary" id="train-toggle">Démarrer</button>
+        <div class="menu">
+          <button class="button" id="reset-toggle">Réinitialiser</button>
+          <div class="menu-pop" id="reset-menu" hidden>
+            <button data-origin="classic"><strong>Valeurs classiques</strong><span>Repartir d’une évaluation écrite à la main.</span></button>
+            <button data-origin="zero"><strong>Zéro absolu</strong><span>Le moteur ne connaît que les règles. Tout est à apprendre.</span></button>
+          </div>
+        </div>
+      </div>
+    </section>
+    <p class="phase-line" id="phase-line"></p>
+
+    <section class="train-grid">
+      <article class="panel tile tile-elo">
+        <header class="panel-head">
+          <h2 class="eyebrow">Progression</h2>
+          <span class="panel-note" id="origin-note"></span>
+        </header>
+        <div class="chart" id="chart-elo"></div>
+        <div class="chart chart-small" id="chart-score"></div>
+        <p class="caption">Courbe : gain d’ELO confirmé par un match de vérification indépendant. Barres : score du candidat contre le champion à chaque génération, <span class="swatch swatch-gold"></span> adopté, <span class="swatch swatch-muted"></span> rejeté.</p>
+      </article>
+
+      <article class="panel tile tile-live">
+        <header class="panel-head">
+          <h2 class="eyebrow">Partie en direct</h2>
+          <span class="panel-note" id="live-note">–</span>
+        </header>
+        <div class="live-players"><span id="live-black">Noirs</span></div>
+        <div class="board board-mini" id="live-board"></div>
+        <div class="live-players"><span id="live-white">Blancs</span></div>
+        <dl class="wdl" id="live-wdl"></dl>
+      </article>
+
+      <article class="panel tile tile-loss">
+        <header class="panel-head">
+          <h2 class="eyebrow">Erreur de prédiction</h2>
+          <span class="panel-note" id="loss-note">–</span>
+        </header>
+        <div class="chart" id="chart-loss"></div>
+        <p class="caption">Écart moyen entre ce que l’évaluation prédit et le vrai résultat des parties. L’ajustement cherche à le faire baisser.</p>
+      </article>
+
+      <article class="panel tile tile-values">
+        <header class="panel-head">
+          <h2 class="eyebrow">Valeur des pièces</h2>
+          <span class="panel-note" id="values-note">champion</span>
+        </header>
+        <div class="values" id="values"></div>
+        <p class="caption">En centipions (100 = un pion), en milieu de partie et en finale.</p>
+      </article>
+
+      <article class="panel tile tile-heat">
+        <header class="panel-head">
+          <h2 class="eyebrow">Où placer ses pièces</h2>
+          <div class="segmented segmented-small" id="heat-phase">
+            <button data-phase="mg" class="is-active">Milieu</button>
+            <button data-phase="eg">Finale</button>
+          </div>
+        </header>
+        <div class="heat-pieces" id="heat-pieces"></div>
+        <div class="heatmap" id="heatmap"></div>
+        <p class="caption">Bonus (or) ou malus (rouille) selon la case, vus du côté des Blancs.</p>
+      </article>
+
+      <article class="panel tile tile-terms">
+        <header class="panel-head"><h2 class="eyebrow">Autres critères</h2></header>
+        <div class="terms" id="terms"></div>
+      </article>
+
+      <article class="panel tile tile-log">
+        <header class="panel-head"><h2 class="eyebrow">Journal des générations</h2></header>
+        <div class="table-wrap">
+          <table class="log">
+            <thead>
+              <tr><th>Gén.</th><th>Parties</th><th>Positions</th><th>Erreur</th><th>Match</th><th>Vérif.</th><th>ELO</th><th>Durée</th><th></th></tr>
+            </thead>
+            <tbody id="log"></tbody>
+          </table>
+        </div>
+      </article>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" hidden></div>
+  <div class="promo" id="promo" hidden></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
