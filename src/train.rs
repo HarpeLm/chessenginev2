@@ -11,6 +11,10 @@
 //!    avec les deux couleurs. S'il marque plus de 50 %, il passe à la vérification.
 //! 4. **Vérification** : un second match indépendant doit confirmer le gain ;
 //!    sinon le candidat est écarté.
+//!
+//! En mode réseau de neurones, l'étape 2 entraîne un NNUE (voir `nnue.rs`) au
+//! lieu d'ajuster la formule. Le réseau a besoin de beaucoup plus de données :
+//! on accumule d'abord des positions avant le premier entraînement.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -22,8 +26,9 @@ use serde_json::json;
 
 use crate::app::App;
 use crate::board::{Board, Color};
-use crate::eval::{self, Weights, MATERIAL, MAX_PHASE, NUM_TERMS};
+use crate::eval::{self, Evaluator, Weights, MATERIAL, MAX_PHASE, NUM_TERMS};
 use crate::movegen::{legal_moves, Move};
+use crate::nnue::{self, Network, TrainOptions};
 use crate::search::{SearchLimits, Searcher, MATE_THRESHOLD};
 
 /// Nombre maximal de positions gardées en mémoire (les plus anciennes sont oubliées).
@@ -36,6 +41,15 @@ const TUNING_EPOCHS: usize = 100;
 const ANCHOR_STRENGTH: f64 = 2e-6;
 /// Pente de la sigmoïde : un avantage de 100 centipions ≈ 64 % de score attendu.
 const SIGMOID_SCALE: f64 = std::f64::consts::LN_10 / 400.0;
+
+/// Positions à accumuler avant le premier entraînement du réseau.
+pub const NNUE_MIN_POSITIONS: usize = 400_000;
+const NNUE_MAX_POSITIONS: usize = 2_000_000;
+/// Passes sur les données : un réseau neuf, puis un réseau qu'on affine.
+const NNUE_FRESH_EPOCHS: usize = 12;
+const NNUE_EPOCHS: usize = 4;
+/// Part du score de la recherche dans la cible (le reste : le résultat de la partie).
+const NNUE_SCORE_WEIGHT: f32 = 0.75;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct TrainConfig {
@@ -98,6 +112,13 @@ pub struct GenerationSummary {
     pub elo: f64,
     pub accepted: bool,
     pub seconds: f64,
+    /// « texel » (formule classique) ou « nnue » (réseau de neurones).
+    #[serde(default = "texel")]
+    pub mode: String,
+}
+
+fn texel() -> String {
+    "texel".into()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -116,10 +137,19 @@ pub struct TrainState {
     pub dataset: usize,
     /// Point de départ : « classic » ou « zero ».
     pub origin: String,
+    /// « texel » (formule classique) ou « nnue » (réseau de neurones).
+    #[serde(default = "texel")]
+    pub mode: String,
+    /// En mode réseau : positions à accumuler avant le premier entraînement.
+    #[serde(skip_deserializing)]
+    pub collect_target: usize,
     pub config: TrainConfig,
     pub history: Vec<GenerationSummary>,
     #[serde(skip_deserializing)]
     pub losses: Vec<f64>,
+    /// Erreur de validation (réseau) : (indice dans `losses`, valeur).
+    #[serde(skip_deserializing)]
+    pub validation_losses: Vec<(usize, f64)>,
     #[serde(skip_deserializing)]
     pub selfplay: Wdl,
     #[serde(skip_deserializing)]
@@ -139,9 +169,12 @@ impl TrainState {
             total_games: 0,
             dataset: 0,
             origin: origin.into(),
+            mode: texel(),
+            collect_target: NNUE_MIN_POSITIONS,
             config: TrainConfig::default(),
             history: Vec::new(),
             losses: Vec::new(),
+            validation_losses: Vec::new(),
             selfplay: Wdl::default(),
             matchup: Wdl::default(),
             verification: Wdl::default(),
@@ -191,6 +224,7 @@ fn set_phase(app: &App, phase: &str) {
             state.matchup = Wdl::default();
             state.verification = Wdl::default();
             state.losses.clear();
+            state.validation_losses.clear();
         }
     }
     app.emit_training();
@@ -202,16 +236,20 @@ fn run(app: Arc<App>, config: TrainConfig, stop: Arc<AtomicBool>) {
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(1, |d| d.as_nanos() as u64)
         | 1;
+    let (mode, origin) = {
+        let state = app.training.lock().unwrap();
+        (state.mode.clone(), state.origin.clone())
+    };
     // Partir de zéro demande de grands changements ; affiner des valeurs
     // classiques demande de la délicatesse.
-    let learning_rate = if app.training.lock().unwrap().origin == "zero" {
-        1.5
-    } else {
-        0.5
-    };
+    let learning_rate = if origin == "zero" { 1.5 } else { 0.5 };
+    let mut started = Instant::now();
+    let mut saved_positions = app.nnue_dataset.lock().unwrap().len();
+    if mode == "nnue" {
+        app.training.lock().unwrap().dataset = saved_positions;
+    }
 
     while !stop.load(Ordering::Relaxed) {
-        let started = Instant::now();
         let champion = app.champion();
 
         // 1. Parties du champion contre lui-même.
@@ -235,37 +273,49 @@ fn run(app: Arc<App>, config: TrainConfig, stop: Arc<AtomicBool>) {
             break;
         };
         let mut selfplay = Wdl::default();
-        let mut samples = Vec::new();
         for game in &games {
             selfplay.add(game.result);
-            for board in &game.quiet_positions {
-                let (features, phase) = eval::trace(board);
-                samples.push(Sample {
-                    features,
-                    phase: phase as u8,
-                    result: game.result,
-                });
+        }
+        app.training.lock().unwrap().total_games += games.len() as u64;
+
+        // 2. Ajustement de la formule, ou entraînement du réseau.
+        let step = if mode == "nnue" {
+            nnue_step(&app, &champion, &games, threads, &stop, next_random(seed))
+        } else {
+            let weights = match &*champion {
+                Evaluator::Classic(weights) => weights.clone(),
+                Evaluator::Nnue(_) => Weights::classic(),
+            };
+            texel_step(&app, &weights, &games, learning_rate, threads, &stop)
+        };
+        if mode == "nnue" {
+            // Sauvegarde régulière des positions (environ toutes les 50 000).
+            let len = app.nnue_dataset.lock().unwrap().len();
+            if len / 50_000 != saved_positions / 50_000 {
+                app.save_positions();
+                saved_positions = len;
             }
         }
-        let new_samples = samples.len();
-
-        // 2. Ajustement des poids sur toutes les positions connues.
-        set_phase(&app, "tuning");
-        let mut dataset = app.dataset.lock().unwrap();
-        dataset.extend(samples);
-        if dataset.len() > MAX_DATASET {
-            let excess = dataset.len() - MAX_DATASET;
-            dataset.drain(..excess);
-        }
-        let dataset_len = dataset.len();
-        app.training.lock().unwrap().dataset = dataset_len;
-        let loss_before = loss_and_gradient(&dataset, &to_params(&champion), threads, false).0;
-        let Some(candidate) = tune(&app, &dataset, &champion, learning_rate, threads, &stop) else {
-            break;
+        let (candidate, loss_before, loss_after, dataset_len, new_samples) = match step {
+            Step::Stopped => break,
+            Step::Collecting => {
+                app.save_training();
+                continue;
+            }
+            Step::Ready {
+                candidate,
+                loss_before,
+                loss_after,
+                dataset,
+                samples,
+            } => (
+                Arc::new(candidate),
+                loss_before,
+                loss_after,
+                dataset,
+                samples,
+            ),
         };
-        let loss_after = loss_and_gradient(&dataset, &to_params(&candidate), threads, false).0;
-        drop(dataset);
-        let candidate = Arc::new(candidate);
 
         // 3. Match candidat contre champion : décide si le candidat est adopté.
         set_phase(&app, "match");
@@ -321,9 +371,8 @@ fn run(app: Arc<App>, config: TrainConfig, stop: Arc<AtomicBool>) {
                 _ => 0.0,
             };
             state.elo += elo_gain;
-            let games_played = config.games_per_generation
-                + config.match_games * (1 + verification.is_some() as usize);
-            state.total_games += games_played as u64;
+            state.total_games +=
+                (config.match_games * (1 + verification.is_some() as usize)) as u64;
             let summary = GenerationSummary {
                 index: state.generation,
                 games: config.games_per_generation,
@@ -338,14 +387,20 @@ fn run(app: Arc<App>, config: TrainConfig, stop: Arc<AtomicBool>) {
                 elo: state.elo,
                 accepted,
                 seconds: started.elapsed().as_secs_f64(),
+                mode: mode.clone(),
             };
             state.history.push(summary);
         }
+        started = Instant::now();
+        *app.last_candidate.lock().unwrap() = Some(candidate.clone());
         app.save_training();
         app.emit_training();
-        app.emit(json!({ "type": "train_weights", "champion": &*app.champion(), "candidate": &*candidate }));
+        app.emit_weights(Some(&candidate));
     }
 
+    if mode == "nnue" {
+        app.save_positions();
+    }
     {
         let mut state = app.training.lock().unwrap();
         state.running = false;
@@ -355,14 +410,163 @@ fn run(app: Arc<App>, config: TrainConfig, stop: Arc<AtomicBool>) {
     app.emit_training();
 }
 
+enum Step {
+    Stopped,
+    /// Pas encore assez de positions pour entraîner le réseau.
+    Collecting,
+    Ready {
+        candidate: Evaluator,
+        loss_before: f64,
+        loss_after: f64,
+        dataset: usize,
+        samples: usize,
+    },
+}
+
+/// Méthode de Texel : ajuste les poids de la formule classique.
+fn texel_step(
+    app: &App,
+    champion: &Weights,
+    games: &[GameRecord],
+    learning_rate: f64,
+    threads: usize,
+    stop: &AtomicBool,
+) -> Step {
+    let mut samples = Vec::new();
+    for game in games {
+        for (board, _) in &game.quiet_positions {
+            let (features, phase) = eval::trace(board);
+            samples.push(Sample {
+                features,
+                phase: phase as u8,
+                result: game.result,
+            });
+        }
+    }
+    let new_samples = samples.len();
+
+    set_phase(app, "tuning");
+    let mut dataset = app.dataset.lock().unwrap();
+    dataset.extend(samples);
+    if dataset.len() > MAX_DATASET {
+        let excess = dataset.len() - MAX_DATASET;
+        dataset.drain(..excess);
+    }
+    let dataset_len = dataset.len();
+    app.training.lock().unwrap().dataset = dataset_len;
+    let loss_before = loss_and_gradient(&dataset, &to_params(champion), threads, false).0;
+    let Some(candidate) = tune(app, &dataset, champion, learning_rate, threads, stop) else {
+        return Step::Stopped;
+    };
+    let loss_after = loss_and_gradient(&dataset, &to_params(&candidate), threads, false).0;
+    Step::Ready {
+        candidate: Evaluator::Classic(candidate),
+        loss_before,
+        loss_after,
+        dataset: dataset_len,
+        samples: new_samples,
+    }
+}
+
+/// Entraîne un réseau de neurones sur toutes les positions accumulées.
+fn nnue_step(
+    app: &App,
+    champion: &Evaluator,
+    games: &[GameRecord],
+    threads: usize,
+    stop: &AtomicBool,
+    seed: u64,
+) -> Step {
+    let mut data = app.nnue_dataset.lock().unwrap();
+    let mut new_samples = 0;
+    for game in games {
+        for (board, score) in &game.quiet_positions {
+            data.push(board, *score, game.result);
+            new_samples += 1;
+        }
+    }
+    if data.len() > NNUE_MAX_POSITIONS {
+        let excess = data.len() - NNUE_MAX_POSITIONS;
+        data.drop_oldest(excess);
+    }
+    let dataset_len = data.len();
+    app.training.lock().unwrap().dataset = dataset_len;
+    if dataset_len < NNUE_MIN_POSITIONS {
+        app.emit_progress();
+        return Step::Collecting;
+    }
+
+    set_phase(app, "tuning");
+    // On affine le réseau champion s'il existe, sinon on part d'un réseau neuf.
+    let (mut network, epochs, learning_rate) = match champion {
+        Evaluator::Nnue(network) => (network.clone(), NNUE_EPOCHS, 0.0007),
+        Evaluator::Classic(_) => (Network::random(seed), NNUE_FRESH_EPOCHS, 0.002),
+    };
+    let loss_before = nnue::validation_loss(&network, &data, NNUE_SCORE_WEIGHT, threads);
+    let options = TrainOptions {
+        epochs,
+        learning_rate,
+        score_weight: NNUE_SCORE_WEIGHT,
+        batch_size: 4096,
+        threads,
+        seed,
+    };
+    let mut last_view = Instant::now();
+    let finished = nnue::train(
+        &mut network,
+        &data,
+        &options,
+        stop,
+        &mut |progress, network| {
+            {
+                let mut state = app.training.lock().unwrap();
+                state.losses.push(progress.train_loss);
+                if let Some(validation) = progress.validation_loss {
+                    let index = state.losses.len() - 1;
+                    state.validation_losses.push((index, validation));
+                }
+                state.progress = progress.step as f64 / progress.steps as f64;
+            }
+            // Ce que le réseau a appris, envoyé de temps en temps (c'est un peu de calcul).
+            let view = (last_view.elapsed().as_millis() > 700
+                || progress.validation_loss.is_some())
+            .then(|| {
+                last_view = Instant::now();
+                Evaluator::Nnue(network.clone()).view()
+            });
+            app.emit(json!({
+                "type": "train_epoch",
+                "epoch": progress.epoch,
+                "epochs": progress.epochs,
+                "step": progress.step,
+                "steps": progress.steps,
+                "loss": progress.train_loss,
+                "validation": progress.validation_loss,
+                "candidate": view,
+            }));
+        },
+    );
+    if !finished {
+        return Step::Stopped;
+    }
+    let loss_after = nnue::validation_loss(&network, &data, NNUE_SCORE_WEIGHT, threads);
+    Step::Ready {
+        candidate: Evaluator::Nnue(network),
+        loss_before,
+        loss_after,
+        dataset: dataset_len,
+        samples: new_samples,
+    }
+}
+
 /// Match aller-retour : chaque ouverture est jouée deux fois, couleurs inversées.
 /// Résultats du point de vue du candidat.
 #[allow(clippy::too_many_arguments)]
 fn run_match(
     app: &App,
     phase: &str,
-    candidate: &Arc<Weights>,
-    champion: &Arc<Weights>,
+    candidate: &Arc<Evaluator>,
+    champion: &Arc<Evaluator>,
     seed: u64,
     games: usize,
     threads: usize,
@@ -404,7 +608,8 @@ struct GameRecord {
     index: usize,
     /// Score des Blancs : 1, 0,5 ou 0.
     result: f32,
-    quiet_positions: Vec<Board>,
+    /// Positions calmes et score de la recherche (du point de vue du camp au trait).
+    quiet_positions: Vec<(Board, i32)>,
 }
 
 /// Joue `total` parties en parallèle. `setup(i)` donne les poids des Blancs,
@@ -418,7 +623,7 @@ fn play_many<F>(
     setup: F,
 ) -> Option<Vec<GameRecord>>
 where
-    F: Fn(usize) -> (Arc<Weights>, Arc<Weights>, u64) + Sync,
+    F: Fn(usize) -> (Arc<Evaluator>, Arc<Evaluator>, u64) + Sync,
 {
     let next = AtomicUsize::new(0);
     let finished = Mutex::new(Vec::with_capacity(total));
@@ -532,14 +737,14 @@ fn random_opening(mut seed: u64) -> (Board, Vec<u64>) {
 /// Joue une partie complète. Renvoie le score des Blancs et les positions
 /// calmes rencontrées, ou None si l'entraînement a été arrêté.
 fn play_game(
-    white: &Arc<Weights>,
-    black: &Arc<Weights>,
+    white: &Arc<Evaluator>,
+    black: &Arc<Evaluator>,
     opening_seed: u64,
     nodes: u64,
     searchers: &mut [Searcher; 2],
     stop: &Arc<AtomicBool>,
     live: &mut dyn FnMut(&Board, Option<Move>, usize),
-) -> Option<(f32, Vec<Board>)> {
+) -> Option<(f32, Vec<(Board, i32)>)> {
     let (mut board, mut history) = random_opening(opening_seed);
     let mut quiet_positions = Vec::new();
     let mut last_move = None;
@@ -573,11 +778,11 @@ fn play_game(
         }
 
         let side = board.side_to_move;
-        let weights = if side == Color::White { white } else { black };
+        let evaluator = if side == Color::White { white } else { black };
         let result = searchers[side.index()].search(
             &board,
             &history,
-            weights.clone(),
+            evaluator.clone(),
             SearchLimits::nodes(nodes),
             stop.clone(),
             &mut |_| {},
@@ -603,7 +808,7 @@ fn play_game(
 
         let quiet = board.captured_kind(mv).is_none() && mv.promotion.is_none();
         if quiet && !board.in_check() && result.score.abs() < MATE_THRESHOLD {
-            quiet_positions.push(board);
+            quiet_positions.push((board, result.score));
         }
 
         board = board.make_move(mv);
@@ -731,7 +936,8 @@ fn tune(
             state.losses.push(loss);
             state.progress = epoch as f64 / TUNING_EPOCHS as f64;
         }
-        let weights = (epoch % 8 == 0 || epoch == TUNING_EPOCHS).then(|| from_params(&params));
+        let weights = (epoch % 8 == 0 || epoch == TUNING_EPOCHS)
+            .then(|| Evaluator::Classic(from_params(&params)).view());
         app.emit(json!({
             "type": "train_epoch",
             "epoch": epoch,

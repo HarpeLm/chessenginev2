@@ -468,7 +468,10 @@ function renderPlayers(game) {
     const chip = el("span", "player-chip " + (color === "w" ? "is-white" : "is-black"));
     const name = el("span", "player-name", isHuman ? "Vous" : "Moteur");
     container.append(chip, name);
-    if (!isHuman) container.append(el("span", "player-sub", generation ? `génération ${generation}` : "valeurs de départ"));
+    if (!isHuman) {
+      const label = isNetwork(app.champion) ? "réseau de neurones" : generation ? "formule ajustée" : "valeurs de départ";
+      container.append(el("span", "player-sub", generation ? `${label} · génération ${generation}` : label));
+    }
     const captured = el("span", "player-captured");
     for (const code of material.captured[color]) {
       const img = el("img");
@@ -577,6 +580,7 @@ async function loadTraining() {
   const data = await api("/api/train");
   app.train = data.state;
   app.champion = data.champion;
+  app.candidate = data.candidate || app.candidate;
   app.layout = data.layout;
   $("#cfg-games").value = String(data.state.config.games_per_generation);
   $("#cfg-nodes").value = String(data.state.config.nodes_per_move);
@@ -609,7 +613,9 @@ function renderTraining() {
     bar.style.width = i === activeIndex ? `${Math.round(state.progress * 100)}%` : "";
   });
 
-  $("#origin-note").textContent = state.origin === "zero" ? "départ : zéro absolu" : "départ : valeurs classiques";
+  const origin = state.origin === "zero" ? "départ : zéro absolu" : "départ : valeurs classiques";
+  $("#origin-note").textContent = state.mode === "nnue" ? `${origin} · puis réseau de neurones` : origin;
+  $$("#pipeline .step-name")[1].textContent = state.mode === "nnue" ? "Réseau" : "Ajustement";
   renderPhaseLine();
   renderStatus();
   drawEloChart();
@@ -624,7 +630,8 @@ function renderStatus() {
   const state = app.train;
   const status = $("#topbar-status");
   if (!state) return;
-  const parts = [`Champion <b>génération ${state.generation}</b>`];
+  const kind = isNetwork(app.champion) ? "réseau" : "formule";
+  const parts = [`Champion <b>génération ${state.generation}</b> (${kind})`];
   if (state.generation) parts.push(`<b>${fmtSigned(state.elo)}</b> ELO`);
   if (state.running) parts.push("entraînement en cours");
   status.innerHTML = parts.join(" · ");
@@ -651,11 +658,17 @@ function renderPhaseLine() {
   const v = state.verification;
   switch (state.phase) {
     case "selfplay":
-      line.innerHTML = `Génération ${next} · le champion joue contre lui-même : <b>${wdlCount(s)}</b> / ${games} parties`;
+      if (state.mode === "nnue" && state.dataset < state.collect_target) {
+        line.innerHTML = `Collecte des données pour le réseau : <b>${fmtInt(state.dataset)}</b> / ${fmtInt(state.collect_target)} positions · parties en cours <b>${wdlCount(s)}</b> / ${games}`;
+      } else {
+        line.innerHTML = `Génération ${next} · le champion joue contre lui-même : <b>${wdlCount(s)}</b> / ${games} parties`;
+      }
       break;
     case "tuning": {
-      const epoch = app.lastEpoch ? `, itération <b>${app.lastEpoch.epoch}</b> / ${app.lastEpoch.epochs}` : "";
-      line.innerHTML = `Génération ${next} · ajustement des poids sur <b>${fmtInt(state.dataset)}</b> positions${epoch}`;
+      const epoch = app.lastEpoch ? `, passe <b>${app.lastEpoch.epoch}</b> / ${app.lastEpoch.epochs}` : "";
+      line.innerHTML = state.mode === "nnue"
+        ? `Génération ${next} · entraînement du réseau sur <b>${fmtInt(state.dataset)}</b> positions${epoch}`
+        : `Génération ${next} · ajustement des poids sur <b>${fmtInt(state.dataset)}</b> positions${epoch.replace("passe", "itération")}`;
       break;
     }
     case "match":
@@ -707,24 +720,68 @@ function onLive(message) {
 
 /* ─────────── Poids : valeurs, carte de chaleur, critères ─────────── */
 
+/**
+ * Évaluation à montrer : le candidat pendant qu'on l'entraîne et qu'il joue
+ * ses matchs ; en mode réseau, le dernier réseau entraîné tant que le
+ * champion est encore la formule classique ; sinon le champion.
+ */
 function displayedWeights() {
-  const tuning = app.train && app.train.running && app.train.phase === "tuning";
-  return tuning && app.candidate ? { weights: app.candidate, candidate: true } : { weights: app.champion, candidate: false };
+  const state = app.train;
+  const testing = state && state.running && ["tuning", "match", "verify"].includes(state.phase);
+  const networkPending = state && state.mode === "nnue" && !isNetwork(app.champion);
+  if (app.candidate && (testing || (networkPending && isNetwork(app.candidate)))) {
+    return { weights: app.candidate, candidate: true };
+  }
+  return { weights: app.champion, candidate: false };
+}
+
+const isNetwork = (view) => view && view.kind === "nnue";
+
+/** Valeur (milieu, finale) des cinq pièces, quel que soit le type d'évaluation. */
+function pieceValues(view) {
+  if (isNetwork(view)) {
+    return [0, 1, 2, 3, 4].map((i) => [view.probe.mg.values[i], view.probe.eg.values[i]]);
+  }
+  const base = app.layout.material;
+  return [0, 1, 2, 3, 4].map((i) => [view.mg[base + i], view.eg[base + i]]);
+}
+
+/** Bonus de chaque case (a1 = 0) pour un type de pièce ; null si la case n'a pas de sens. */
+function squareTable(view, phase, kind) {
+  if (isNetwork(view)) return view.probe[phase].pst[kind];
+  const offset = app.layout.pst + kind * 64;
+  return view[phase].slice(offset, offset + 64);
 }
 
 function renderWeights() {
   if (!app.champion || !app.layout) return;
   const { weights, candidate } = displayedWeights();
-  $("#values-note").textContent = candidate ? "candidat en cours d’ajustement" : "champion";
+  const network = isNetwork(weights);
+  const phase = app.train && app.train.running ? app.train.phase : "idle";
+  let note = network ? "réseau champion" : "champion";
+  if (candidate) {
+    if (phase === "tuning") note = network ? "réseau en cours d’entraînement" : "candidat en cours d’ajustement";
+    else if (phase === "match" || phase === "verify") note = network ? "réseau candidat, en match" : "candidat, en match";
+    else note = "dernier réseau entraîné";
+  }
+  $("#values-note").textContent = note;
+  $(".tile-values .caption").textContent = network
+    ? "Mesurée en interrogeant le réseau : ce que rapporte une pièce blanche ajoutée à une position de référence, en moyenne sur toutes les cases. En centipions (100 = un pion)."
+    : "En centipions (100 = un pion), en milieu de partie et en finale.";
+  $(".tile-heat .caption").textContent = network
+    ? "Ce que le réseau pense de chaque case : bonus (or) ou malus (rouille) par rapport à la moyenne. Milieu : rois et pions en place. Finale : rois seuls."
+    : "Bonus (or) ou malus (rouille) selon la case, vus du côté des Blancs.";
+  $(".tile-terms .eyebrow").textContent = network ? "Le réseau" : "Autres critères";
   renderValues(weights, candidate);
   renderHeatmap(weights);
-  renderTerms(weights);
+  if (network) renderNetwork(weights);
+  else renderTerms(weights);
 }
 
 function renderValues(weights, candidate) {
   const box = $("#values");
-  const base = app.layout.material;
-  const values = PIECE_ORDER.slice(0, 5).map((_, i) => [weights.mg[base + i], weights.eg[base + i]]);
+  const values = pieceValues(weights);
+  const reference = candidate && app.champion.kind === weights.kind ? pieceValues(app.champion) : null;
   const scale = Math.max(1000, ...values.flat().map(Math.abs));
   box.innerHTML = "";
   const head = el("div", "value-head");
@@ -746,10 +803,9 @@ function renderValues(weights, candidate) {
     }
     const numbers = [mg, eg].map((value, j) => {
       const num = el("span", "value-num" + (j ? " eg" : ""), fmtInt(value));
-      if (candidate) {
-        const reference = (j ? app.champion.eg : app.champion.mg)[base + i];
-        if (value > reference) num.classList.add("delta-up");
-        if (value < reference) num.classList.add("delta-down");
+      if (reference) {
+        if (value > reference[i][j]) num.classList.add("delta-up");
+        if (value < reference[i][j]) num.classList.add("delta-down");
       }
       return num;
     });
@@ -780,16 +836,19 @@ function renderHeatPieces() {
 
 function renderHeatmap(weights) {
   const map = $("#heatmap");
-  const table = weights[app.heatPhase];
-  const offset = app.layout.pst + app.heatPiece * 64;
-  const values = [];
-  for (let sq = 0; sq < 64; sq++) values.push(table[offset + sq]);
-  const peak = Math.max(20, ...values.map(Math.abs));
+  const values = squareTable(weights, app.heatPhase, app.heatPiece);
+  const peak = Math.max(20, ...values.filter((v) => v !== null).map(Math.abs));
   map.innerHTML = "";
   for (let rank = 7; rank >= 0; rank--) {
     map.append(el("span", "heat-axis", String(rank + 1)));
     for (let file = 0; file < 8; file++) {
       const value = values[rank * 8 + file];
+      if (value === null || value === undefined) {
+        const cell = el("span", "heat-cell is-empty");
+        cell.title = `${FILES[file]}${rank + 1} : case occupée dans la position de référence`;
+        map.append(cell);
+        continue;
+      }
       const cell = el("span", "heat-cell", value ? String(value) : "");
       const alpha = 0.06 + 0.8 * Math.min(1, Math.abs(value) / peak);
       cell.style.backgroundColor = value >= 0
@@ -802,6 +861,30 @@ function renderHeatmap(weights) {
   }
   map.append(el("span"));
   for (const file of FILES) map.append(el("span", "heat-axis", file));
+}
+
+function renderNetwork(view) {
+  const box = $("#terms");
+  box.innerHTML = "";
+  const validation = app.train && app.train.history.length
+    ? [...app.train.history].reverse().find((g) => g.mode === "nnue")
+    : null;
+  const rows = [
+    ["Entrées", `${view.inputs}`],
+    ["Neurones cachés", `2 × ${view.hidden}`],
+    ["Paramètres", fmtInt(view.parameters)],
+    ["Passes d’entraînement", fmtInt(view.epochs)],
+    ["Erreur de validation", validation ? fmtDecimal(validation.loss_after, 4) : "–"],
+  ];
+  for (const [name, value] of rows) {
+    const row = el("div", "term-row term-row-2");
+    row.append(el("span", "term-name", name), el("span", "term-val", value));
+    box.append(row);
+  }
+  box.append(el("p", "caption",
+    "Chaque entrée signale une pièce sur une case (2 couleurs × 6 pièces × 64 cases). "
+    + "Les neurones cachés combinent ces entrées ; la sortie donne l’évaluation. "
+    + "Personne n’a écrit ces règles : le réseau les a déduites des parties."));
 }
 
 function renderTerms(weights) {
@@ -866,7 +949,7 @@ function renderLog() {
   for (const g of [...history].reverse()) {
     const row = el("tr");
     const cells = [
-      [String(g.index)],
+      [g.mode === "nnue" ? `${g.index} · réseau` : String(g.index)],
       [fmtInt(g.games)],
       [`+${fmtInt(g.samples)}`, "muted"],
       [`${fmtDecimal(g.loss_before, 4)} → ${fmtDecimal(g.loss_after, 4)}`, "muted"],
@@ -1017,12 +1100,16 @@ function drawLossChart() {
   const state = app.train;
   const box = chartBox(container, { left: 52, right: 12, top: 10, bottom: 22 });
   let values = state.losses;
-  let xLabel = "itération";
+  let validation = state.validation_losses || [];
+  let xLabel = state.mode === "nnue" ? "lot" : "itération";
   let note = "";
   if (values.length) {
-    note = `${fmtDecimal(values[0], 4)} → ${fmtDecimal(values[values.length - 1], 4)}`;
+    note = validation.length
+      ? `validation ${fmtDecimal(validation[validation.length - 1][1], 4)}`
+      : `${fmtDecimal(values[0], 4)} → ${fmtDecimal(values[values.length - 1], 4)}`;
   } else if (state.history.length) {
     values = state.history.map((g) => g.loss_after);
+    validation = [];
     xLabel = "génération";
     note = "après chaque génération";
   }
@@ -1030,13 +1117,17 @@ function drawLossChart() {
 
   let svg = `<svg viewBox="0 0 ${box.width} ${box.height}">`;
   if (values.length >= 2) {
-    let min = Math.min(...values);
-    let max = Math.max(...values);
+    // La toute première chute est très forte : on cadre sur la suite pour
+    // qu'on voie la progression (le début sort par le haut).
+    const settled = values.length > 20 ? values.slice(Math.floor(values.length * 0.08)) : values;
+    const all = settled.concat(validation.map((p) => p[1]));
+    let min = Math.min(...all);
+    let max = Math.max(...all);
     const pad = (max - min) * 0.1 || max * 0.02 || 0.01;
     min -= pad;
     max += pad;
     const sx = (i) => box.left + (i / (values.length - 1)) * (box.right - box.left);
-    const sy = (v) => box.bottom - ((v - min) / (max - min)) * (box.bottom - box.top);
+    const sy = (v) => box.bottom - ((Math.min(v, max) - min) / (max - min)) * (box.bottom - box.top);
     for (const t of ticks(min, max, 3)) {
       if (t < min || t > max) continue;
       svg += `<line class="grid-line" x1="${box.left}" x2="${box.right}" y1="${sy(t)}" y2="${sy(t)}"/>`;
@@ -1046,8 +1137,13 @@ function drawLossChart() {
     svg += `<text class="axis-label" x="${box.left}" y="${box.bottom + 16}">1</text>`;
     const line = values.map((v, i) => `${i ? "L" : "M"}${sx(i).toFixed(1)},${sy(v).toFixed(1)}`).join("");
     svg += `<path class="series" d="${line}"/>`;
+    if (validation.length) {
+      const vline = validation.map(([i, v], k) => `${k ? "L" : "M"}${sx(i).toFixed(1)},${sy(v).toFixed(1)}`).join("");
+      svg += `<path class="series-validation" d="${vline}"/>`;
+      for (const [i, v] of validation) svg += `<circle class="dot-validation" cx="${sx(i)}" cy="${sy(v)}" r="2.6"/>`;
+    }
   } else {
-    svg += `<text class="empty" x="${(box.left + box.right) / 2}" y="${(box.top + box.bottom) / 2}" text-anchor="middle">En attente de la première phase d’ajustement.</text>`;
+    svg += `<text class="empty" x="${(box.left + box.right) / 2}" y="${(box.top + box.bottom) / 2}" text-anchor="middle">En attente de la première phase d’apprentissage.</text>`;
   }
   svg += "</svg>";
   container.innerHTML = svg;
@@ -1068,7 +1164,7 @@ const handlers = {
     const wasRunning = app.train && app.train.running;
     app.train = message.state;
     if (message.state.phase !== "tuning") app.lastEpoch = null;
-    if (!message.state.running && wasRunning) app.candidate = null;
+
     renderTraining();
     if (app.game) renderPlayers(app.game);
   },
@@ -1079,7 +1175,10 @@ const handlers = {
       progress: message.progress,
       selfplay: message.selfplay,
       matchup: message.matchup,
+      verification: message.verification,
+      dataset: message.dataset,
     });
+    $("#kpi-data").textContent = fmtInt(message.dataset);
     renderPhaseLine();
     renderWdl();
     const index = PHASES.indexOf(message.phase);
@@ -1090,7 +1189,10 @@ const handlers = {
     if (!app.train) return;
     app.lastEpoch = message;
     app.train.losses.push(message.loss);
-    app.train.progress = message.epoch / message.epochs;
+    if (message.validation !== null && message.validation !== undefined) {
+      app.train.validation_losses.push([app.train.losses.length - 1, message.validation]);
+    }
+    app.train.progress = message.steps ? message.step / message.steps : message.epoch / message.epochs;
     const item = $$("#pipeline li")[1];
     if (item) $("i", item).style.width = `${Math.round(app.train.progress * 100)}%`;
     if (message.candidate) {
@@ -1204,8 +1306,11 @@ function bindControls() {
   $$("#reset-menu button").forEach((button) => {
     button.addEventListener("click", async () => {
       menu.hidden = true;
-      const label = button.dataset.origin === "zero" ? "zéro" : "valeurs classiques";
-      if (!confirm(`Effacer tout l’apprentissage et repartir de ${label} ?`)) return;
+      const origin = button.dataset.origin;
+      const question = origin === "nnue"
+        ? "Passer au réseau de neurones ? Ton champion actuel et l’historique sont conservés : un réseau va apprendre à battre ce champion."
+        : `Effacer tout l’apprentissage et repartir ${origin === "zero" ? "de zéro" : "des valeurs classiques"} ?`;
+      if (!confirm(question)) return;
       try {
         await api("/api/train/reset", { origin: button.dataset.origin });
         await loadTraining();

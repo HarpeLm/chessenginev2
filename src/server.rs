@@ -172,7 +172,8 @@ async fn train_state(State(app): Shared) -> Json<Value> {
     use crate::eval::*;
     Json(json!({
         "state": app.training_snapshot(),
-        "champion": &*app.champion(),
+        "champion": app.champion().view(),
+        "candidate": app.last_candidate.lock().unwrap().as_ref().map(|c| c.view()),
         // Position de chaque critère dans les vecteurs de poids.
         "layout": {
             "material": MATERIAL,

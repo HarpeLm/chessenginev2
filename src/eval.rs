@@ -9,8 +9,45 @@
 //! `train.rs`) peut ajuster automatiquement chaque poids à partir de parties.
 
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 
 use crate::board::*;
+use crate::nnue::{Network, HIDDEN, INPUTS};
+
+/// L'évaluation utilisée par la recherche : la formule classique à poids
+/// ajustables, ou le réseau de neurones.
+pub enum Evaluator {
+    Classic(Weights),
+    Nnue(Network),
+}
+
+impl Evaluator {
+    /// Score en centipions, du point de vue du camp au trait.
+    pub fn evaluate(&self, board: &Board) -> i32 {
+        match self {
+            Evaluator::Classic(weights) => evaluate(board, weights),
+            Evaluator::Nnue(network) => network.evaluate_board(board),
+        }
+    }
+
+    /// Ce que l'interface affiche : les poids de la formule classique, ou ce
+    /// qu'on obtient en interrogeant le réseau.
+    pub fn view(&self) -> Value {
+        match self {
+            Evaluator::Classic(weights) => {
+                json!({ "kind": "classic", "mg": weights.mg, "eg": weights.eg })
+            }
+            Evaluator::Nnue(network) => json!({
+                "kind": "nnue",
+                "probe": network.probe(),
+                "inputs": INPUTS,
+                "hidden": HIDDEN,
+                "parameters": Network::parameter_count(),
+                "epochs": network.epochs,
+            }),
+        }
+    }
+}
 
 // Disposition des termes dans les vecteurs de poids.
 pub const MATERIAL: usize = 0; // 6 termes, un par type de pièce

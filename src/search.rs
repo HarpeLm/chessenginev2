@@ -7,8 +7,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::board::{Board, PieceKind};
-use crate::eval::{evaluate, Weights};
+use crate::eval::{Evaluator, Weights};
 use crate::movegen::{generate_moves, legal_moves, Move};
+use crate::nnue::Accumulator;
 use crate::tt::{Bound, Entry, TranspositionTable};
 
 pub const INFINITY: i32 = 32_000;
@@ -79,7 +80,11 @@ pub struct SearchResult {
 
 pub struct Searcher {
     tt: TranspositionTable,
-    weights: Arc<Weights>,
+    evaluator: Arc<Evaluator>,
+    /// Position à chaque profondeur du chemin en cours, et l'accumulateur du
+    /// réseau de neurones correspondant (mis à jour incrémentalement).
+    boards: Vec<Board>,
+    accumulators: Vec<Accumulator>,
     killers: [[Option<Move>; 2]; MAX_PLY],
     history: [[i32; 64]; 64],
     /// Clés des positions de la partie et du chemin en cours (détection des répétitions).
@@ -97,7 +102,9 @@ impl Searcher {
     pub fn new(hash_mb: usize) -> Searcher {
         Searcher {
             tt: TranspositionTable::new(hash_mb),
-            weights: Arc::new(Weights::classic()),
+            evaluator: Arc::new(Evaluator::Classic(Weights::classic())),
+            boards: vec![Board::empty(); MAX_PLY],
+            accumulators: vec![Accumulator::default(); MAX_PLY],
             killers: [[None; 2]; MAX_PLY],
             history: [[0; 64]; 64],
             path: Vec::new(),
@@ -128,15 +135,15 @@ impl Searcher {
         &mut self,
         board: &Board,
         game_history: &[u64],
-        weights: Arc<Weights>,
+        evaluator: Arc<Evaluator>,
         limits: SearchLimits,
         stop: Arc<AtomicBool>,
         on_info: &mut dyn FnMut(&SearchInfo),
     ) -> SearchResult {
-        if !Arc::ptr_eq(&self.weights, &weights) {
+        if !Arc::ptr_eq(&self.evaluator, &evaluator) {
             // Nouvelle évaluation : les scores en cache ne sont plus valables.
             self.tt.clear();
-            self.weights = weights;
+            self.evaluator = evaluator;
         }
         self.limits = limits;
         self.stop = stop;
@@ -245,6 +252,31 @@ impl Searcher {
         false
     }
 
+    /// Mémorise la position de cette profondeur et, avec le réseau de neurones,
+    /// met à jour l'accumulateur à partir de celui de la position parente.
+    fn enter(&mut self, board: &Board, ply: usize) {
+        if let Evaluator::Nnue(network) = &*self.evaluator {
+            if ply == 0 {
+                self.accumulators[0] = network.refresh(board);
+            } else {
+                let mut acc = self.accumulators[ply - 1];
+                network.update(&mut acc, &self.boards[ply - 1], board);
+                self.accumulators[ply] = acc;
+            }
+        }
+        self.boards[ply] = *board;
+    }
+
+    /// Évaluation de la position (du point de vue du camp au trait).
+    fn static_eval(&self, board: &Board, ply: usize) -> i32 {
+        match &*self.evaluator {
+            Evaluator::Classic(weights) => crate::eval::evaluate(board, weights),
+            Evaluator::Nnue(network) => {
+                network.evaluate(&self.accumulators[ply], board.side_to_move)
+            }
+        }
+    }
+
     fn negamax(
         &mut self,
         board: &Board,
@@ -259,6 +291,7 @@ impl Searcher {
         if self.stopped {
             return 0;
         }
+        self.enter(board, ply);
 
         let is_root = ply == 0;
         if !is_root
@@ -269,7 +302,7 @@ impl Searcher {
             return 0;
         }
         if ply >= MAX_PLY - 1 {
-            return evaluate(board, &self.weights);
+            return self.static_eval(board, ply);
         }
 
         let in_check = board.in_check();
@@ -304,7 +337,7 @@ impl Searcher {
             && depth >= 3
             && beta.abs() < MATE_THRESHOLD
             && board.has_non_pawn_material(us)
-            && evaluate(board, &self.weights) >= beta
+            && self.static_eval(board, ply) >= beta
         {
             let reduction = if depth > 6 { 3 } else { 2 };
             let child = board.make_null_move();
@@ -432,8 +465,9 @@ impl Searcher {
         if self.stopped {
             return 0;
         }
+        self.enter(board, ply);
         if ply >= MAX_PLY - 1 {
-            return evaluate(board, &self.weights);
+            return self.static_eval(board, ply);
         }
 
         let in_check = board.in_check();
@@ -442,7 +476,7 @@ impl Searcher {
             // En échec, on ne peut pas « ne rien faire » : on regarde toutes les parades.
             best_score = -MATE + ply as i32;
         } else {
-            let stand_pat = evaluate(board, &self.weights);
+            let stand_pat = self.static_eval(board, ply);
             if stand_pat >= beta {
                 return stand_pat;
             }
@@ -583,7 +617,7 @@ mod tests {
         let result = searcher.search(
             &board,
             &[],
-            Arc::new(Weights::classic()),
+            Arc::new(Evaluator::Classic(Weights::classic())),
             limits,
             Arc::new(AtomicBool::new(false)),
             &mut |_| {},
@@ -623,5 +657,41 @@ mod tests {
         // Les Blancs ont une dame : Qg6 ou Qf7 pataient, il faut trouver Qg7#.
         let (_, score) = best_move("7k/8/5K2/8/8/8/8/6Q1 w - - 0 1", 6);
         assert!(mate_in(score).is_some_and(|m| m > 0));
+    }
+}
+
+#[cfg(test)]
+mod speed {
+    use super::*;
+
+    // `cargo test --release -- --ignored --nocapture compare_speed`
+    #[test]
+    #[ignore]
+    fn compare_speed() {
+        let evaluators = [
+            ("formule", Arc::new(Evaluator::Classic(Weights::classic()))),
+            (
+                "réseau",
+                Arc::new(Evaluator::Nnue(crate::nnue::Network::random(1))),
+            ),
+        ];
+        for (name, evaluator) in evaluators {
+            let board = Board::from_fen(
+                "r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P1b1/P1NP1N2/1PP1QPPP/R4RK1 w - - 0 10",
+            )
+            .unwrap();
+            let mut searcher = Searcher::new(16);
+            let start = Instant::now();
+            let result = searcher.search(
+                &board,
+                &[],
+                evaluator,
+                SearchLimits::nodes(3_000_000),
+                Arc::new(AtomicBool::new(false)),
+                &mut |_| {},
+            );
+            let seconds = start.elapsed().as_secs_f64();
+            println!("{name}: {:.0} positions/s", result.nodes as f64 / seconds);
+        }
     }
 }

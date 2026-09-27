@@ -9,14 +9,14 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use crate::board::{Board, Color};
-use crate::eval::{evaluate, Weights};
+use crate::eval::Evaluator;
 use crate::movegen::parse_uci_move;
 use crate::search::{mate_in, SearchLimits, Searcher, MAX_DEPTH};
 
 /// Marge de sécurité pour ne jamais perdre au temps (communication avec l'interface).
 const MOVE_OVERHEAD_MS: u64 = 30;
 
-pub fn run(weights: Arc<Weights>) {
+pub fn run(weights: Arc<Evaluator>) {
     let mut board = Board::start_position();
     let mut history = vec![board.hash];
     let mut searcher = Some(Searcher::new(64));
@@ -115,7 +115,7 @@ pub fn run(weights: Arc<Weights>) {
                 return;
             }
             "d" => board.print(),
-            "eval" => println!("{} cp (camp au trait)", evaluate(&board, &weights)),
+            "eval" => println!("{} cp (camp au trait)", weights.evaluate(&board)),
             _ => println!("info string commande inconnue : {line}"),
         }
     }

@@ -570,6 +570,9 @@ select:disabled { opacity: 0.45; }
 .chart .series-area { fill: url(#fade); stroke: none; }
 .chart .series-muted { fill: none; stroke: var(--faint); stroke-width: 1; }
 .chart .dot { fill: var(--gold); }
+.chart .series-validation { fill: none; stroke: #dcd7c8; stroke-width: 1.2; stroke-dasharray: 3 3; }
+.chart .dot-validation { fill: #dcd7c8; }
+.legend-validation { color: var(--text-2); }
 .chart .dot-rejected { fill: var(--bg); stroke: var(--faint); stroke-width: 1; }
 .chart .bar-accepted { fill: var(--gold); }
 .chart .bar-rejected { fill: var(--faint); }
@@ -643,11 +646,13 @@ select:disabled { opacity: 0.45; }
   transition: background-color 0.5s var(--ease);
 }
 .heat-axis { display: grid; place-items: center; font-size: 10px; color: var(--faint); }
+.heat-cell.is-empty { background: transparent; box-shadow: inset 0 0 0 1px var(--line); }
 
 /* Autres critères */
 .terms { display: flex; flex-direction: column; }
 .term-row { display: grid; grid-template-columns: 1fr 44px 44px; gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
 .term-row:last-child { border-bottom: 0; }
+.term-row-2 { grid-template-columns: 1fr auto; }
 .term-name { color: var(--text-2); }
 .term-val { text-align: right; color: var(--text-2); }
 .term-val.eg { color: var(--muted); }

@@ -28,6 +28,7 @@ Autres commandes :
 | `cargo run --release -- --port 8081` | interface sur un autre port |
 | `cargo run --release -- uci` | mode UCI, pour brancher le moteur sur Cute Chess, Arena ou lichess-bot |
 | `cargo run --release -- perft 6` | compte les positions à la profondeur 6 (doit donner 119 060 324) |
+| `cargo run --release -- bench` | vitesse de recherche du champion enregistré |
 | `cargo test --release` | lance les tests |
 
 Les poids appris et l'historique d'entraînement sont enregistrés dans le dossier `data/`. Supprime-le pour tout remettre à zéro.
@@ -39,7 +40,8 @@ Les poids appris et l'historique d'entraînement sont enregistrés dans le dossi
 | `src/board.rs` | l'échiquier : pièces, cases, lecture et écriture FEN, jouer un coup, cases attaquées, hachage Zobrist |
 | `src/movegen.rs` | génération des coups légaux, notations UCI (`e2e4`) et SAN (`Nf3`) |
 | `src/perft.rs` | le test perft, qui prouve que la génération des coups est exacte |
-| `src/eval.rs` | l'évaluation : matériel, tables de position, pions passés, mobilité… |
+| `src/eval.rs` | l'évaluation classique : matériel, tables de position, pions passés, mobilité… |
+| `src/nnue.rs` | le réseau de neurones d'évaluation (NNUE) : calcul rapide, mise à jour incrémentale, entraînement |
 | `src/search.rs` | la recherche : alpha-bêta, approfondissement itératif, quiescence, coup nul, réductions, tri des coups |
 | `src/tt.rs` | la table de transposition (le cache des positions déjà analysées) |
 | `src/train.rs` | l'apprentissage par parties contre soi-même (méthode de Texel) |
@@ -63,6 +65,19 @@ Deux points de départ sont possibles, depuis le bouton « Réinitialiser » :
 
 - **Valeurs classiques** : une évaluation écrite à la main, que l'entraînement affine. Les progrès sont lents et beaucoup de candidats sont rejetés, c'est normal.
 - **Zéro absolu** : le moteur ne connaît que les règles. Les premières générations progressent de plusieurs centaines d'ELO, et on voit apparaître la valeur des pièces et les bonnes cases.
+
+## Le réseau de neurones (NNUE)
+
+Dans « Réinitialiser », choisis **Passer au réseau de neurones**. Ton champion actuel et l'historique sont conservés : un réseau va apprendre à battre ce champion.
+
+- **Architecture** : 768 entrées (2 couleurs × 6 pièces × 64 cases), puis 2 × 128 neurones cachés (la position vue par les Blancs et vue par les Noirs), puis une sortie qui donne l'évaluation. Environ 99 000 paramètres.
+- **Rapide dans la recherche** : un coup ne change que 2 à 4 entrées, donc on met à jour les neurones cachés au lieu de tout recalculer. Les calculs se font en nombres entiers.
+- **Données** : le champion joue contre lui-même. Chaque position calme est gardée avec le score de la recherche et le résultat de la partie. Le réseau apprend à prédire un mélange des deux (75 % score, 25 % résultat).
+- **Premier entraînement** : il faut d'abord accumuler 400 000 positions, soit quelques minutes. Ensuite, chaque génération ajoute des parties et affine le réseau. Jusqu'à 2 millions de positions sont gardées en mémoire.
+- **Validation** : une position sur 20 n'est jamais montrée au réseau pendant l'apprentissage. Son erreur (en pointillés sur le graphique) montre si le réseau généralise ou s'il apprend par cœur.
+- **Adoption** : comme pour la formule classique, le réseau doit gagner le match de sélection puis la vérification.
+
+Le réseau champion est enregistré dans `data/nnue.bin`.
 
 ## Crédits
 

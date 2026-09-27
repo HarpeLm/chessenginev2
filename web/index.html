@@ -149,6 +149,7 @@
           <div class="menu-pop" id="reset-menu" hidden>
             <button data-origin="classic"><strong>Valeurs classiques</strong><span>Repartir d’une évaluation écrite à la main.</span></button>
             <button data-origin="zero"><strong>Zéro absolu</strong><span>Le moteur ne connaît que les règles. Tout est à apprendre.</span></button>
+            <button data-origin="nnue"><strong>Passer au réseau de neurones</strong><span>Garde l’historique. Un réseau apprend à battre ton champion actuel.</span></button>
           </div>
         </div>
       </div>
@@ -183,7 +184,7 @@
           <span class="panel-note" id="loss-note">–</span>
         </header>
         <div class="chart" id="chart-loss"></div>
-        <p class="caption">Écart moyen entre ce que l’évaluation prédit et le vrai résultat des parties. L’ajustement cherche à le faire baisser.</p>
+        <p class="caption">Écart moyen entre ce que l’évaluation prédit et le vrai résultat des parties. L’apprentissage cherche à le faire baisser. <span class="legend-validation">Pointillés</span> : positions de validation, jamais montrées au réseau pendant l’apprentissage.</p>
       </article>
 
       <article class="panel tile tile-values">
