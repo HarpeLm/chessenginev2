@@ -395,6 +395,7 @@ const app = {
 
 const board = new BoardView($("#board"), { interactive: true, onMove: playMove });
 const liveBoard = new BoardView($("#live-board"));
+const measureBoard = new BoardView($("#measure-board"));
 
 /* ═══════════════════════════ Partie ═══════════════════════════ */
 
@@ -1149,6 +1150,202 @@ function drawLossChart() {
   container.innerHTML = svg;
 }
 
+/* ═══════════════════════════ Mesure ═══════════════════════════ */
+
+async function loadMeasure() {
+  app.measure = await api("/api/measure");
+  renderMeasure();
+}
+
+/** La mesure affichée : celle en cours, sinon la dernière terminée. */
+function shownRun() {
+  const state = app.measure;
+  if (!state) return null;
+  return state.current || state.history[state.history.length - 1] || null;
+}
+
+const played = (wdl) => wdl.wins + wdl.draws + wdl.losses;
+const fmtClock = (ms) => {
+  const seconds = Math.max(0, Math.ceil(ms / 1000));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+};
+const fmtCadence = (run) => `${run.base_ms / 1000} s + ${fmtDecimal(run.increment_ms / 1000, 1)}`;
+
+function renderMeasure() {
+  const state = app.measure;
+  if (!state) return;
+  const run = shownRun();
+  const running = state.running;
+
+  const status = $("#sf-status");
+  status.classList.toggle("is-error", !state.stockfish);
+  if (state.stockfish) {
+    status.innerHTML = `Adversaire : <b>${state.stockfish.name}</b> · ${state.stockfish.path}`;
+  } else {
+    status.textContent = state.error || "Recherche de Stockfish…";
+  }
+  $("#sf-missing").hidden = Boolean(state.stockfish) || running;
+  if (state.path && !$("#sf-path").value) $("#sf-path").value = state.path;
+
+  const toggle = $("#m-toggle");
+  toggle.textContent = running ? "Arrêter" : "Démarrer";
+  toggle.disabled = !running && !state.stockfish;
+  for (const id of ["#m-elo", "#m-count", "#m-tc"]) $(id).disabled = running;
+
+  if (run) {
+    const n = played(run.wdl);
+    $("#m-estimate").textContent = run.estimate ? `≈ ${fmtInt(run.estimate)}` : "–";
+    $("#m-margin").textContent = run.margin ? `± ${fmtInt(run.margin)}` : "–";
+    $("#m-games").textContent = `${n} / ${run.games}`;
+    $("#m-score").textContent = n ? `${Math.round(((run.wdl.wins + run.wdl.draws / 2) / n) * 100)} %` : "–";
+  } else {
+    for (const id of ["#m-estimate", "#m-margin", "#m-score"]) $(id).textContent = "–";
+    $("#m-games").textContent = "0";
+  }
+
+  const line = $("#m-line");
+  if (!run) {
+    line.textContent = state.stockfish
+      ? "Choisis un niveau et lance la mesure. Commence vers 2000, puis ajuste : l’estimation est la plus précise quand le score est proche de 50 %."
+      : "";
+  } else {
+    const n = played(run.wdl);
+    const who = `Ton moteur (${run.engine}) contre ${run.opponent} réglé à ${run.opponent_elo}, ${fmtCadence(run)}`;
+    let advice = "";
+    if (n >= 10 && run.wdl.wins === n) advice = " Ton moteur gagne tout : choisis un niveau plus élevé pour une mesure précise.";
+    else if (n >= 10 && run.wdl.losses === n) advice = " Ton moteur perd tout : choisis un niveau plus bas pour une mesure précise.";
+    else if (n >= 20) {
+      const score = (run.wdl.wins + run.wdl.draws / 2) / n;
+      if (score > 0.8) advice = " Score très élevé : un niveau plus haut donnerait une mesure plus précise.";
+      if (score < 0.2) advice = " Score très bas : un niveau plus bas donnerait une mesure plus précise.";
+    }
+    const [ours, theirs] = run.time_losses || [0, 0];
+    if (ours || theirs) advice += ` Pertes au temps : ton moteur ${ours}, Stockfish ${theirs}.`;
+    line.innerHTML = running
+      ? `${who} · <b>${n}</b> / ${run.games} parties terminées.${advice}`
+      : `${run.finished ? "Mesure terminée" : "Mesure interrompue"} · ${who} · ${n} parties.${advice}`;
+  }
+  $("#m-note").textContent = run ? `Stockfish ${run.opponent_elo}` : "";
+
+  renderMeasureWdl(run);
+  drawMeasureChart();
+  renderMeasureLog();
+}
+
+function renderMeasureWdl(run) {
+  const box = $("#m-wdl");
+  const wdl = run ? run.wdl : { wins: 0, draws: 0, losses: 0 };
+  const total = Math.max(1, played(wdl));
+  box.innerHTML = "";
+  [["Victoires", wdl.wins], ["Nulles", wdl.draws], ["Défaites", wdl.losses]].forEach(([label, value]) => {
+    const cell = el("div");
+    cell.append(el("dt", "", label), el("dd", "", fmtInt(value)));
+    box.append(cell);
+  });
+  const bar = el("div", "wdl-bar");
+  for (const [cls, value] of [["w", wdl.wins], ["d", wdl.draws], ["l", wdl.losses]]) {
+    const part = el("i", cls);
+    part.style.width = `${(value / total) * 100}%`;
+    bar.append(part);
+  }
+  box.append(bar);
+}
+
+function drawMeasureChart() {
+  const container = $("#chart-measure");
+  const run = shownRun();
+  const box = chartBox(container, { left: 52, right: 12, top: 12, bottom: 22 });
+  let svg = `<svg viewBox="0 0 ${box.width} ${box.height}">`;
+  const points = run ? run.points : [];
+  if (points.length) {
+    const reference = run.opponent_elo;
+    const lows = points.map((p) => p[1] - p[2]);
+    const highs = points.map((p) => p[1] + p[2]);
+    let min = Math.min(reference - 100, ...lows);
+    let max = Math.max(reference + 100, ...highs);
+    const yTicks = ticks(min, max, 4);
+    min = Math.min(min, yTicks[0]);
+    max = Math.max(max, yTicks[yTicks.length - 1]);
+    const maxX = Math.max(run.games, 2);
+    const sx = (x) => box.left + (x / maxX) * (box.right - box.left);
+    const sy = (y) => box.bottom - ((y - min) / (max - min)) * (box.bottom - box.top);
+    for (const t of yTicks) {
+      svg += `<line class="grid-line" x1="${box.left}" x2="${box.right}" y1="${sy(t)}" y2="${sy(t)}"/>`;
+      svg += `<text class="axis-label" x="${box.left - 10}" y="${sy(t) + 3}" text-anchor="end">${fmtInt(t)}</text>`;
+    }
+    for (const t of ticks(0, maxX, 5).filter(Number.isInteger)) {
+      svg += `<text class="axis-label" x="${sx(t)}" y="${box.bottom + 16}" text-anchor="middle">${t}</text>`;
+    }
+    svg += `<line class="reference" x1="${box.left}" x2="${box.right}" y1="${sy(reference)}" y2="${sy(reference)}"/>`;
+    svg += `<text class="reference-label" x="${box.right}" y="${sy(reference) - 6}" text-anchor="end">Stockfish ${reference}</text>`;
+    const upper = points.map((p, i) => `${i ? "L" : "M"}${sx(p[0]).toFixed(1)},${sy(p[1] + p[2]).toFixed(1)}`).join("");
+    const lower = [...points].reverse().map((p) => `L${sx(p[0]).toFixed(1)},${sy(p[1] - p[2]).toFixed(1)}`).join("");
+    svg += `<path class="band" d="${upper}${lower}Z"/>`;
+    const line = points.map((p, i) => `${i ? "L" : "M"}${sx(p[0]).toFixed(1)},${sy(p[1]).toFixed(1)}`).join("");
+    svg += `<path class="series" d="${line}"/>`;
+    const last = points[points.length - 1];
+    svg += `<circle class="dot" cx="${sx(last[0])}" cy="${sy(last[1])}" r="3"/>`;
+  } else {
+    svg += `<text class="empty" x="${(box.left + box.right) / 2}" y="${(box.top + box.bottom) / 2}" text-anchor="middle">L’estimation apparaîtra après la première partie.</text>`;
+  }
+  svg += "</svg>";
+  container.innerHTML = svg;
+  if (points.length) {
+    const maxX = Math.max(run.games, 2);
+    const hover = points.map((p) => ({
+      px: box.left + (p[0] / maxX) * (box.right - box.left),
+      py: 20,
+      p,
+    }));
+    attachTooltip(container, hover, ({ p }) => `Après ${p[0]} parties : ≈ ${fmtInt(p[1])} ± ${fmtInt(p[2])}`);
+  }
+}
+
+function renderMeasureLog() {
+  const body = $("#m-log");
+  const history = app.measure.history;
+  body.innerHTML = "";
+  if (!history.length) {
+    const row = el("tr", "log-empty");
+    const cell = el("td", "", "Aucune mesure pour l’instant.");
+    cell.colSpan = 7;
+    row.append(cell);
+    body.append(row);
+    return;
+  }
+  for (const run of [...history].reverse()) {
+    const date = new Date(run.started_at * 1000).toLocaleString("fr-FR", {
+      day: "numeric",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    const n = played(run.wdl);
+    const row = el("tr");
+    const cells = [
+      [date, "muted"],
+      [run.engine],
+      [`${run.opponent} · ${run.opponent_elo}`],
+      [fmtCadence(run), "muted"],
+      [run.finished ? String(n) : `${n} / ${run.games}`],
+      [`${run.wdl.wins} – ${run.wdl.draws} – ${run.wdl.losses}`],
+      [run.estimate ? `≈ ${fmtInt(run.estimate)} ± ${fmtInt(run.margin)}` : "–"],
+    ];
+    for (const [text, cls] of cells) row.append(el("td", cls || "", text));
+    body.append(row);
+  }
+}
+
+function onMeasureLive(message) {
+  const last = message.last_move;
+  measureBoard.setPosition(message.fen, { lastMove: last ? [last.slice(0, 2), last.slice(2, 4)] : null });
+  $("#m-white").textContent = `Blancs · ${message.white}`;
+  $("#m-black").textContent = `Noirs · ${message.black}`;
+  $("#m-white-clock").textContent = fmtClock(message.clocks[0]);
+  $("#m-black-clock").textContent = fmtClock(message.clocks[1]);
+  $("#m-live-note").textContent = `partie ${message.game} · coup ${Math.max(1, Math.ceil(message.ply / 2))}`;
+}
+
 /* ═══════════════════════════ Événements en direct ═══════════════════════════ */
 
 const handlers = {
@@ -1210,6 +1407,13 @@ const handlers = {
   train_live(message) {
     onLive(message);
   },
+  measure_state(message) {
+    app.measure = message.state;
+    renderMeasure();
+  },
+  measure_live(message) {
+    onMeasureLive(message);
+  },
 };
 
 function connectEvents() {
@@ -1223,6 +1427,7 @@ function connectEvents() {
     try {
       renderGame(await api("/api/game"));
       await loadTraining();
+      await loadMeasure();
     } catch (error) {
       toast(error.message);
     }
@@ -1234,9 +1439,9 @@ function connectEvents() {
 function setView(view) {
   app.view = view;
   $$(".tab").forEach((tab) => tab.classList.toggle("is-active", tab.dataset.view === view));
-  $("#view-play").hidden = view !== "play";
-  $("#view-train").hidden = view !== "train";
+  for (const name of ["play", "train", "measure"]) $(`#view-${name}`).hidden = view !== name;
   if (view === "train") requestAnimationFrame(renderTraining);
+  if (view === "measure") requestAnimationFrame(renderMeasure);
   try { localStorage.setItem("chessengine.view", view); } catch (_) { /* stockage indisponible */ }
 }
 
@@ -1328,10 +1533,37 @@ function bindControls() {
     });
   });
 
+  $("#m-toggle").addEventListener("click", async () => {
+    try {
+      if (app.measure && app.measure.running) {
+        await api("/api/measure/stop", {});
+      } else {
+        const [base, increment] = $("#m-tc").value.split("/").map(Number);
+        await api("/api/measure/start", {
+          opponent_elo: Number($("#m-elo").value),
+          games: Number($("#m-count").value),
+          base_ms: base,
+          increment_ms: increment,
+        });
+      }
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+  $("#sf-detect").addEventListener("click", async () => {
+    try {
+      app.measure = await api("/api/measure/detect", { path: $("#sf-path").value || null });
+      renderMeasure();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+
   let resizeTimer = null;
   window.addEventListener("resize", () => {
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => {
+      if (app.view === "measure" && app.measure) drawMeasureChart();
       if (app.view === "train" && app.train) {
         drawEloChart();
         drawScoreChart();
@@ -1345,6 +1577,7 @@ async function start() {
   bindControls();
   renderHeatPieces();
   liveBoard.setPosition("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+  measureBoard.setPosition("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
   try {
     const game = await api("/api/game");
     app.orientation = game.human;
@@ -1359,12 +1592,13 @@ async function start() {
     }
     renderGame(game);
     await loadTraining();
+    await loadMeasure();
   } catch (error) {
     toast("Impossible de joindre le moteur : " + error.message);
   }
   let saved = null;
   try { saved = localStorage.getItem("chessengine.view"); } catch (_) { /* stockage indisponible */ }
-  setView(saved === "train" ? "train" : "play");
+  setView(["train", "measure"].includes(saved) ? saved : "play");
   connectEvents();
 }
 

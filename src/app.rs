@@ -10,6 +10,7 @@ use tokio::sync::broadcast;
 
 use crate::eval::{Evaluator, Weights};
 use crate::game::Game;
+use crate::measure::MeasureState;
 use crate::nnue::{Dataset, Network};
 use crate::search::Searcher;
 use crate::train::{Sample, TrainState};
@@ -38,6 +39,9 @@ pub struct App {
     pub engine_stop: Mutex<Arc<AtomicBool>>,
     pub training: Mutex<TrainState>,
     pub train_stop: Mutex<Arc<AtomicBool>>,
+    /// Mesures du niveau contre Stockfish.
+    pub measure: Mutex<MeasureState>,
+    pub measure_stop: Mutex<Arc<AtomicBool>>,
     /// Le dernier candidat entraîné (pour l'affichage).
     pub last_candidate: Mutex<Option<Arc<Evaluator>>>,
     /// Positions pour la formule classique (méthode de Texel).
@@ -76,6 +80,13 @@ impl App {
             training: Mutex::new(training),
             train_stop: Mutex::new(Arc::new(AtomicBool::new(false))),
             last_candidate: Mutex::new(None),
+            measure: Mutex::new(
+                std::fs::read_to_string(data_dir.join("measures.json"))
+                    .ok()
+                    .and_then(|text| serde_json::from_str(&text).ok())
+                    .unwrap_or_default(),
+            ),
+            measure_stop: Mutex::new(Arc::new(AtomicBool::new(false))),
             dataset: Mutex::new(Vec::new()),
             nnue_dataset: Mutex::new(positions),
             data_dir,
@@ -147,6 +158,18 @@ impl App {
         } else {
             let _ = data.save(&path.to_string_lossy());
         }
+    }
+
+    pub fn save_measures(&self) {
+        let state = self.measure.lock().unwrap().clone();
+        if let Ok(text) = serde_json::to_string(&state) {
+            let _ = std::fs::write(self.data_dir.join("measures.json"), text);
+        }
+    }
+
+    pub fn emit_measure(&self) {
+        let state = self.measure.lock().unwrap().clone();
+        self.emit(json!({ "type": "measure_state", "state": state }));
     }
 
     pub fn save_training(&self) {

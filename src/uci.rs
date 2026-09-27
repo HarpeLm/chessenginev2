@@ -11,10 +11,7 @@ use std::time::Duration;
 use crate::board::{Board, Color};
 use crate::eval::Evaluator;
 use crate::movegen::parse_uci_move;
-use crate::search::{mate_in, SearchLimits, Searcher, MAX_DEPTH};
-
-/// Marge de sécurité pour ne jamais perdre au temps (communication avec l'interface).
-const MOVE_OVERHEAD_MS: u64 = 30;
+use crate::search::{clock_limits, mate_in, SearchLimits, Searcher, MAX_DEPTH, MOVE_OVERHEAD_MS};
 
 pub fn run(weights: Arc<Evaluator>) {
     let mut board = Board::start_position();
@@ -174,14 +171,13 @@ fn parse_go(tokens: &[&str], board: &Board) -> (SearchLimits, bool) {
         Color::Black => (value("btime"), value("binc")),
     };
     if let Some(time) = time {
-        let time = time.max(0) as u64;
-        let increment = increment.unwrap_or(0).max(0) as u64;
-        let moves_to_go = value("movestogo").unwrap_or(30).max(1) as u64;
-        let available = time.saturating_sub(MOVE_OVERHEAD_MS);
-        let soft = (available / moves_to_go + increment * 3 / 4).min(available / 2);
-        let hard = (soft * 3).min(available * 3 / 4).max(soft);
-        limits.soft_time = Some(Duration::from_millis(soft));
-        limits.hard_time = Some(Duration::from_millis(hard));
+        let clock = clock_limits(
+            time.max(0) as u64,
+            increment.unwrap_or(0).max(0) as u64,
+            value("movestogo").map(|m| m.max(1) as u64),
+        );
+        limits.soft_time = clock.soft_time;
+        limits.hard_time = clock.hard_time;
         return (limits, false);
     }
     // « go » tout seul : réflexion infinie.

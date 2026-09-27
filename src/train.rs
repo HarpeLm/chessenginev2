@@ -77,7 +77,7 @@ pub struct Wdl {
 }
 
 impl Wdl {
-    fn add(&mut self, score: f32) {
+    pub fn add(&mut self, score: f32) {
         if score > 0.75 {
             self.wins += 1;
         } else if score < 0.25 {
@@ -87,7 +87,7 @@ impl Wdl {
         }
     }
 
-    fn score(&self) -> f64 {
+    pub fn score(&self) -> f64 {
         let games = (self.wins + self.draws + self.losses).max(1) as f64;
         (self.wins as f64 + 0.5 * self.draws as f64) / games
     }

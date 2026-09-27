@@ -79,6 +79,42 @@ Dans « Réinitialiser », choisis **Passer au réseau de neurones**. Ton champi
 
 Le réseau champion est enregistré dans `data/nnue.bin`.
 
+## Mesurer le niveau contre Stockfish
+
+L'onglet **Mesure** fait jouer ton moteur contre Stockfish bridé à un niveau choisi (option `UCI_Elo`, de 1320 à 3190). Chaque ouverture est jouée deux fois, une fois avec chaque couleur, avec une vraie pendule. Le score donne une estimation du classement et une marge d'erreur à 95 %, qui se resserre au fil des parties.
+
+1. Installer Stockfish (une seule fois) : `brew install stockfish`. L'application le trouve toute seule ; sinon, indique son chemin dans l'onglet.
+2. Choisir un niveau (commencer vers 2000), 100 parties, cadence 30 s + 0,3.
+3. Ajuster : la mesure est la plus précise quand le score est proche de 50 %. Si ton moteur gagne presque tout, monte le niveau, et inversement.
+
+L'échelle de `UCI_Elo` est celle des listes de moteurs (CCRL), calibrée par Stockfish à la cadence 60 s + 0,6. Ce n'est pas un classement FIDE. Stockfish est un logiciel libre (GPL) : l'utiliser comme adversaire est autorisé. Il n'est pas inclus dans ce projet, tu l'installes à part.
+
+## Jouer sur Lichess
+
+Lichess autorise les bots via son API officielle, avec un **compte dédié**. Règle absolue : n'utilise jamais ton moteur pour t'aider dans tes propres parties, c'est de la triche et le compte est banni.
+
+1. Crée un **nouveau compte Lichess** pour le bot. Il ne doit avoir joué aucune partie.
+2. Connecté avec ce compte, crée un jeton d'accès avec la permission « Play games with the bot API » : <https://lichess.org/account/oauth/token/create?scopes[]=bot:play>.
+3. Installe [lichess-bot](https://github.com/lichess-bot-devs/lichess-bot) (Python 3) :
+   ```bash
+   git clone https://github.com/lichess-bot-devs/lichess-bot.git
+   cd lichess-bot
+   python3 -m venv venv && source venv/bin/activate
+   pip install -r requirements.txt
+   cp config.yml.default config.yml
+   ```
+4. Dans `config.yml`, renseigne le jeton et ton moteur :
+   ```yaml
+   token: "ton-jeton"
+   engine:
+     dir: "/chemin/vers/chessengine/scripts/"
+     name: "chessengine-uci"
+     protocol: "uci"
+   ```
+   Le script `scripts/chessengine-uci` lance le moteur depuis le dossier du projet, pour qu'il utilise ton champion entraîné. Compile d'abord avec `cargo build --release`.
+5. Transforme le compte en compte BOT (une seule fois, irréversible) : `python3 lichess-bot.py -u`.
+6. Lance le bot : `python3 lichess-bot.py`. Il accepte les défis ; tu peux le défier depuis ton compte personnel, ou activer la section `matchmaking` de `config.yml` pour qu'il défie d'autres bots. Son classement Lichess apparaît sur son profil après quelques parties.
+
 ## Crédits
 
 Les pièces « Staunty » sont de sadsnake1, sous licence [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/). Elles proviennent de [lichess](https://github.com/lichess-org/lila). Cette licence interdit l'usage commercial.

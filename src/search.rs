@@ -59,6 +59,28 @@ impl SearchLimits {
     }
 }
 
+/// Marge de sécurité pour ne jamais perdre au temps (communication avec l'interface).
+pub const MOVE_OVERHEAD_MS: u64 = 30;
+
+/// Gestion du temps en partie avec pendule : combien réfléchir pour ce coup,
+/// selon le temps restant, l'incrément et le nombre de coups avant le
+/// prochain contrôle (30 par défaut).
+pub fn clock_limits(
+    time_left_ms: u64,
+    increment_ms: u64,
+    moves_to_go: Option<u64>,
+) -> SearchLimits {
+    let available = time_left_ms.saturating_sub(MOVE_OVERHEAD_MS);
+    let moves_to_go = moves_to_go.unwrap_or(30).max(1);
+    let soft = (available / moves_to_go + increment_ms * 3 / 4).min(available / 2);
+    let hard = (soft * 3).min(available * 3 / 4).max(soft);
+    SearchLimits {
+        soft_time: Some(Duration::from_millis(soft)),
+        hard_time: Some(Duration::from_millis(hard)),
+        ..SearchLimits::infinite()
+    }
+}
+
 /// Informations envoyées après chaque itération (pour l'affichage en direct).
 #[derive(Clone, Debug)]
 pub struct SearchInfo {

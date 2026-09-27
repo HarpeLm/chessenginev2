@@ -1,0 +1,5 @@
+#!/bin/sh
+# Lance le moteur en mode UCI depuis le dossier du projet, pour qu'il retrouve
+# ses poids entraînés (dossier data/). Utilisé par lichess-bot, Cute Chess…
+cd "$(dirname "$0")/.." || exit 1
+exec ./target/release/chessengine uci

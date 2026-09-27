@@ -684,6 +684,34 @@ select:disabled { opacity: 0.45; }
 .log .tag-no { color: var(--faint); }
 .log-empty td { color: var(--faint); padding: 20px 0; }
 
+/* Mesure */
+.chart-tall { height: 280px; }
+.chart .band { fill: rgba(205, 184, 131, 0.12); stroke: none; }
+.chart .reference { stroke: var(--text-2); stroke-width: 1; stroke-dasharray: 3 4; opacity: 0.6; }
+.chart .reference-label { fill: var(--muted); font-size: 10px; font-family: var(--font); }
+.sf-status { margin: 0; color: var(--muted); font-size: 13px; }
+.sf-status b { color: var(--text-2); font-weight: 400; }
+.sf-status.is-error { color: var(--rust); }
+.sf-missing { margin: 16px 0 0; padding: 16px 18px; border: 1px solid var(--line-2); border-left: 2px solid var(--gold-2); color: var(--text-2); font-size: 14px; line-height: 1.6; }
+.sf-missing p { margin: 0 0 12px; }
+.sf-missing code, .note-text code { color: var(--gold); font-size: 13px; }
+.sf-missing a, .note-text a { color: var(--gold); }
+.sf-path { display: flex; gap: 10px; }
+.sf-path input {
+  flex: 1;
+  max-width: 420px;
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text-2);
+  font-size: 13px;
+}
+.clock { font-size: 13px; color: var(--text-2); letter-spacing: 0.04em; }
+.note-text { margin: 0; max-width: 90ch; color: var(--muted); font-size: 14px; line-height: 1.7; }
+.note-text b { color: var(--text-2); font-weight: 400; }
+
 /* Notification */
 .toast {
   position: fixed;

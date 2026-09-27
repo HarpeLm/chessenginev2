@@ -1,7 +1,9 @@
 mod app;
 mod board;
 mod eval;
+mod external;
 mod game;
+mod measure;
 mod movegen;
 mod nnue;
 mod perft;

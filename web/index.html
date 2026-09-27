@@ -22,6 +22,7 @@
     <nav class="tabs" role="tablist">
       <button class="tab is-active" data-view="play" role="tab">Partie</button>
       <button class="tab" data-view="train" role="tab">Entraînement</button>
+      <button class="tab" data-view="measure" role="tab">Mesure</button>
     </nav>
     <div class="topbar-status" id="topbar-status"></div>
   </header>
@@ -224,6 +225,108 @@
             <tbody id="log"></tbody>
           </table>
         </div>
+      </article>
+    </section>
+  </main>
+
+  <!-- ─────────────── Mesure ─────────────── -->
+  <main class="view view-train view-measure" id="view-measure" hidden>
+    <section class="train-head">
+      <div class="train-intro">
+        <h1 class="display">Mesure du niveau</h1>
+        <p class="lede">Ton moteur affronte Stockfish bridé à un niveau connu. Chaque ouverture est jouée deux fois, une fois avec chaque couleur. Le score donne une estimation de son classement, avec une marge d’erreur qui se resserre au fil des parties.</p>
+      </div>
+      <dl class="kpis">
+        <div class="kpi"><dt>Estimation</dt><dd id="m-estimate">–</dd></div>
+        <div class="kpi"><dt>Marge à 95 %</dt><dd id="m-margin">–</dd></div>
+        <div class="kpi"><dt>Parties</dt><dd id="m-games">0</dd></div>
+        <div class="kpi"><dt>Score</dt><dd id="m-score">–</dd></div>
+      </dl>
+    </section>
+
+    <section class="train-bar">
+      <p class="sf-status" id="sf-status">Recherche de Stockfish…</p>
+      <div class="train-controls">
+        <label class="select-wrap">
+          <span>Niveau</span>
+          <select id="m-elo">
+            <option value="1400">1400</option>
+            <option value="1600">1600</option>
+            <option value="1800">1800</option>
+            <option value="2000" selected>2000</option>
+            <option value="2200">2200</option>
+            <option value="2400">2400</option>
+            <option value="2600">2600</option>
+            <option value="2800">2800</option>
+          </select>
+        </label>
+        <label class="select-wrap">
+          <span>Parties</span>
+          <select id="m-count">
+            <option value="20">20</option>
+            <option value="50">50</option>
+            <option value="100" selected>100</option>
+            <option value="200">200</option>
+          </select>
+        </label>
+        <label class="select-wrap">
+          <span>Cadence</span>
+          <select id="m-tc">
+            <option value="10000/100">10 s + 0,1</option>
+            <option value="30000/300" selected>30 s + 0,3</option>
+            <option value="60000/600">60 s + 0,6</option>
+          </select>
+        </label>
+        <button class="button button-primary" id="m-toggle">Démarrer</button>
+      </div>
+    </section>
+
+    <section class="sf-missing" id="sf-missing" hidden>
+      <p>Stockfish n’est pas installé, ou l’application ne le trouve pas. Sur Mac, ouvre le Terminal et tape <code>brew install stockfish</code> (Homebrew : <a href="https://brew.sh" target="_blank" rel="noopener">brew.sh</a>), puis clique sur « Vérifier ». Tu peux aussi indiquer son chemin.</p>
+      <div class="sf-path">
+        <input type="text" id="sf-path" placeholder="/opt/homebrew/bin/stockfish" spellcheck="false">
+        <button class="button" id="sf-detect">Vérifier</button>
+      </div>
+    </section>
+
+    <p class="phase-line" id="m-line"></p>
+
+    <section class="train-grid">
+      <article class="panel tile tile-elo">
+        <header class="panel-head">
+          <h2 class="eyebrow">Estimation au fil des parties</h2>
+          <span class="panel-note" id="m-note"></span>
+        </header>
+        <div class="chart chart-tall" id="chart-measure"></div>
+        <p class="caption">Trait : estimation du classement. Bande : marge d’erreur à 95 %. Pointillés : le niveau réglé de Stockfish. L’échelle est celle des listes de moteurs (CCRL), calibrée par Stockfish à la cadence 60 s + 0,6 ; ce n’est pas un classement FIDE.</p>
+      </article>
+
+      <article class="panel tile tile-live">
+        <header class="panel-head">
+          <h2 class="eyebrow">Partie en direct</h2>
+          <span class="panel-note" id="m-live-note">–</span>
+        </header>
+        <div class="live-players"><span id="m-black">Noirs</span><span class="clock" id="m-black-clock"></span></div>
+        <div class="board board-mini" id="measure-board"></div>
+        <div class="live-players"><span id="m-white">Blancs</span><span class="clock" id="m-white-clock"></span></div>
+        <dl class="wdl" id="m-wdl"></dl>
+      </article>
+
+      <article class="panel tile tile-log">
+        <header class="panel-head"><h2 class="eyebrow">Mesures précédentes</h2></header>
+        <div class="table-wrap">
+          <table class="log">
+            <thead>
+              <tr><th>Date</th><th>Ton moteur</th><th>Adversaire</th><th>Cadence</th><th>Parties</th><th>V – N – D</th><th>Estimation</th></tr>
+            </thead>
+            <tbody id="m-log"></tbody>
+          </table>
+        </div>
+      </article>
+
+      <article class="panel tile tile-log">
+        <header class="panel-head"><h2 class="eyebrow">Et contre des humains ?</h2></header>
+        <p class="note-text">Branche ton moteur sur Lichess avec l’outil officiel <a href="https://github.com/lichess-bot-devs/lichess-bot" target="_blank" rel="noopener">lichess-bot</a> et un compte <b>bot dédié</b> : un nouveau compte qui n’a jamais joué, converti en compte BOT. Il obtiendra un vrai classement Lichess. N’utilise jamais ton moteur dans tes propres parties : c’est de la triche et le compte est banni. Le pas-à-pas est dans le README, section « Jouer sur Lichess ».</p>
       </article>
     </section>
   </main>

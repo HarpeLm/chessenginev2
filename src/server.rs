@@ -18,6 +18,7 @@ use tokio_stream::{Stream, StreamExt};
 
 use crate::app::App;
 use crate::game;
+use crate::measure::{self, MeasureConfig};
 use crate::train::{self, TrainConfig};
 
 type Shared = State<Arc<App>>;
@@ -73,6 +74,10 @@ pub async fn serve(app: Arc<App>, port: u16, open_browser: bool) {
         .route("/api/train/start", post(train_start))
         .route("/api/train/stop", post(train_stop))
         .route("/api/train/reset", post(train_reset))
+        .route("/api/measure", get(measure_state))
+        .route("/api/measure/detect", post(measure_detect))
+        .route("/api/measure/start", post(measure_start))
+        .route("/api/measure/stop", post(measure_stop))
         .with_state(app);
 
     let listener = match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
@@ -224,4 +229,54 @@ async fn train_reset(State(app): Shared, Json(body): Json<TrainReset>) -> Respon
         Ok(()) => Json(json!({ "ok": true })).into_response(),
         Err(message) => error(message),
     }
+}
+
+async fn measure_state(State(app): Shared) -> Json<Value> {
+    // Première visite : on cherche Stockfish.
+    let needs_detection = {
+        let state = app.measure.lock().unwrap();
+        state.stockfish.is_none() && state.error.is_none()
+    };
+    if needs_detection {
+        let app = app.clone();
+        let _ = tokio::task::spawn_blocking(move || measure::detect(&app, None)).await;
+    }
+    Json(json!(app.measure.lock().unwrap().clone()))
+}
+
+#[derive(Deserialize)]
+struct MeasureDetect {
+    path: Option<String>,
+}
+
+async fn measure_detect(State(app): Shared, Json(body): Json<MeasureDetect>) -> Json<Value> {
+    let app2 = app.clone();
+    let _ = tokio::task::spawn_blocking(move || measure::detect(&app2, body.path)).await;
+    Json(json!(app.measure.lock().unwrap().clone()))
+}
+
+#[derive(Deserialize)]
+struct MeasureStart {
+    opponent_elo: u32,
+    games: usize,
+    base_ms: u64,
+    increment_ms: u64,
+}
+
+async fn measure_start(State(app): Shared, Json(body): Json<MeasureStart>) -> Response {
+    let config = MeasureConfig {
+        opponent_elo: body.opponent_elo.clamp(1320, 3190),
+        games: body.games.clamp(2, 1000),
+        base_ms: body.base_ms.clamp(1_000, 600_000),
+        increment_ms: body.increment_ms.min(10_000),
+    };
+    match measure::start(app.clone(), config) {
+        Ok(()) => Json(json!({ "ok": true })).into_response(),
+        Err(message) => error(message),
+    }
+}
+
+async fn measure_stop(State(app): Shared) -> Json<Value> {
+    measure::stop(&app);
+    Json(json!({ "ok": true }))
 }
