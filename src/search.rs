@@ -118,6 +118,11 @@ pub struct Searcher {
     stopped: bool,
     root_depth: i32,
     root_best: Option<Move>,
+    /// Réflexion sur le temps de l'adversaire (« ponder ») : tant que ce drapeau
+    /// est levé, on ignore la pendule. Quand il retombe (l'adversaire a joué le
+    /// coup prévu), le chronomètre démarre.
+    ponder: Option<Arc<AtomicBool>>,
+    pondering: bool,
 }
 
 impl Searcher {
@@ -137,7 +142,33 @@ impl Searcher {
             stopped: false,
             root_depth: 0,
             root_best: None,
+            ponder: None,
+            pondering: false,
         }
+    }
+
+    /// Les prochaines recherches réfléchiront sur le temps de l'adversaire tant
+    /// que `flag` vaut vrai. `None` : recherche normale.
+    pub fn set_ponder(&mut self, flag: Option<Arc<AtomicBool>>) {
+        self.ponder = flag;
+    }
+
+    /// Est-on encore en train de réfléchir sur le temps de l'adversaire ?
+    /// Au moment où ça s'arrête, la pendule démarre.
+    fn still_pondering(&mut self) -> bool {
+        if !self.pondering {
+            return false;
+        }
+        if self
+            .ponder
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::Relaxed))
+        {
+            return true;
+        }
+        self.pondering = false;
+        self.start = Instant::now();
+        false
     }
 
     /// Oublie tout ce qui a été appris pendant les parties précédentes.
@@ -172,6 +203,10 @@ impl Searcher {
         self.stopped = false;
         self.nodes = 0;
         self.start = Instant::now();
+        self.pondering = self
+            .ponder
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::Relaxed));
         self.killers = [[None; 2]; MAX_PLY];
         for row in self.history.iter_mut() {
             for value in row.iter_mut() {
@@ -217,9 +252,11 @@ impl Searcher {
                 elapsed: self.start.elapsed(),
                 pv: self.principal_variation(board, depth),
             });
-            if let Some(soft) = limits.soft_time {
-                if self.start.elapsed() >= soft {
-                    break;
+            if !self.still_pondering() {
+                if let Some(soft) = limits.soft_time {
+                    if self.start.elapsed() >= soft {
+                        break;
+                    }
                 }
             }
             if let Some(max_nodes) = limits.max_nodes {
@@ -250,9 +287,11 @@ impl Searcher {
             if self.stop.load(Ordering::Relaxed) {
                 self.stopped = true;
             }
-            if let Some(hard) = self.limits.hard_time {
-                if self.start.elapsed() >= hard {
-                    self.stopped = true;
+            if !self.still_pondering() {
+                if let Some(hard) = self.limits.hard_time {
+                    if self.start.elapsed() >= hard {
+                        self.stopped = true;
+                    }
                 }
             }
         }

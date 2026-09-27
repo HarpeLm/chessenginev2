@@ -19,6 +19,7 @@ pub fn run(weights: Arc<Evaluator>) {
     let mut searcher = Some(Searcher::new(64));
     let mut handle: Option<JoinHandle<Searcher>> = None;
     let mut stop = Arc::new(AtomicBool::new(false));
+    let mut pondering = Arc::new(AtomicBool::new(false));
 
     for line in io::stdin().lock().lines() {
         let Ok(line) = line else { break };
@@ -32,16 +33,19 @@ pub fn run(weights: Arc<Evaluator>) {
                 println!("id name chessengine {}", env!("CARGO_PKG_VERSION"));
                 println!("id author HarpeLm");
                 println!("option name Hash type spin default 64 min 1 max 4096");
+                println!("option name Ponder type check default false");
                 println!("uciok");
             }
             "isready" => println!("readyok"),
             "ucinewgame" => {
+                interrupt(&stop, &pondering);
                 wait(&mut searcher, &mut handle);
                 searcher.as_mut().unwrap().clear();
                 board = Board::start_position();
                 history = vec![board.hash];
             }
             "setoption" => {
+                interrupt(&stop, &pondering);
                 wait(&mut searcher, &mut handle);
                 let name = tokens
                     .iter()
@@ -58,6 +62,7 @@ pub fn run(weights: Arc<Evaluator>) {
                 }
             }
             "position" => {
+                interrupt(&stop, &pondering);
                 wait(&mut searcher, &mut handle);
                 match parse_position(&tokens) {
                     Ok((b, h)) => {
@@ -68,13 +73,21 @@ pub fn run(weights: Arc<Evaluator>) {
                 }
             }
             "go" => {
+                interrupt(&stop, &pondering);
                 wait(&mut searcher, &mut handle);
                 let (limits, infinite) = parse_go(&tokens, &board);
                 stop = Arc::new(AtomicBool::new(false));
+                // « go ponder » : on réfléchit sur le temps de l'adversaire jusqu'à
+                // « ponderhit » (il a joué le coup prévu) ou « stop » (autre coup).
+                pondering = Arc::new(AtomicBool::new(tokens.contains(&"ponder")));
                 let mut s = searcher.take().unwrap();
+                s.set_ponder(Some(pondering.clone()));
                 let (b, h, flag, w) = (board, history.clone(), stop.clone(), weights.clone());
+                let ponder_flag = pondering.clone();
                 handle = Some(thread::spawn(move || {
+                    let mut last_pv = Vec::new();
                     let result = s.search(&b, &h, w, limits, flag.clone(), &mut |info| {
+                        last_pv = info.pv.clone();
                         let score = match mate_in(info.score) {
                             Some(m) => format!("mate {m}"),
                             None => format!("cp {}", info.score),
@@ -91,22 +104,45 @@ pub fn run(weights: Arc<Evaluator>) {
                             pv.join(" ")
                         );
                     });
-                    // En mode infini, UCI impose d'attendre « stop » avant de répondre.
-                    while infinite && !flag.load(Ordering::Relaxed) {
+                    // En mode infini ou pendant le temps de l'adversaire, UCI impose
+                    // d'attendre « stop » (ou « ponderhit ») avant de répondre.
+                    while (infinite || ponder_flag.load(Ordering::Relaxed))
+                        && !flag.load(Ordering::Relaxed)
+                    {
                         thread::sleep(Duration::from_millis(2));
                     }
                     match result.best_move {
-                        Some(mv) => println!("bestmove {}", mv.to_uci()),
+                        Some(mv) => {
+                            // On propose aussi le coup qu'on attend de l'adversaire,
+                            // pour pouvoir y réfléchir pendant son temps.
+                            let expected = (last_pv.first() == Some(&mv))
+                                .then(|| last_pv.get(1))
+                                .flatten();
+                            match expected {
+                                Some(reply) => {
+                                    println!("bestmove {} ponder {}", mv.to_uci(), reply.to_uci())
+                                }
+                                None => println!("bestmove {}", mv.to_uci()),
+                            }
+                        }
                         None => println!("bestmove 0000"),
                     }
+                    s.set_ponder(None);
                     s
                 }));
             }
+            "ponderhit" => {
+                // L'adversaire a joué le coup prévu : la pendule démarre, la
+                // recherche continue avec l'avance déjà prise.
+                pondering.store(false, Ordering::Relaxed);
+            }
             "stop" => {
+                pondering.store(false, Ordering::Relaxed);
                 stop.store(true, Ordering::Relaxed);
                 wait(&mut searcher, &mut handle);
             }
             "quit" => {
+                pondering.store(false, Ordering::Relaxed);
                 stop.store(true, Ordering::Relaxed);
                 wait(&mut searcher, &mut handle);
                 return;
@@ -118,6 +154,12 @@ pub fn run(weights: Arc<Evaluator>) {
     }
     stop.store(true, Ordering::Relaxed);
     wait(&mut searcher, &mut handle);
+}
+
+/// Interrompt une recherche encore en cours (l'interface est passée à autre chose).
+fn interrupt(stop: &AtomicBool, pondering: &AtomicBool) {
+    pondering.store(false, Ordering::Relaxed);
+    stop.store(true, Ordering::Relaxed);
 }
 
 fn wait(searcher: &mut Option<Searcher>, handle: &mut Option<JoinHandle<Searcher>>) {

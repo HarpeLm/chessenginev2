@@ -110,7 +110,9 @@ Lichess autorise les bots via son API officielle, avec un **compte dédié**. R�
      dir: "/chemin/vers/chessengine/scripts/"
      name: "chessengine-uci"
      protocol: "uci"
+     ponder: true
    ```
+   Avec `ponder: true`, le moteur réfléchit aussi pendant le temps de l'adversaire : il devine sa réponse et prend de l'avance, ce qui le rend plus fort sans rien changer d'autre.
    Le script `scripts/chessengine-uci` lance le moteur depuis le dossier du projet, pour qu'il utilise ton champion entraîné. Compile d'abord avec `cargo build --release`.
 5. Transforme le compte en compte BOT (une seule fois, irréversible) : `python3 lichess-bot.py -u`.
 6. Lance le bot : `python3 lichess-bot.py`. Il accepte les défis ; tu peux le défier depuis ton compte personnel, ou activer la section `matchmaking` de `config.yml` pour qu'il défie d'autres bots. Son classement Lichess apparaît sur son profil après quelques parties.
