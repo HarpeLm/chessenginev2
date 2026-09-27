@@ -662,7 +662,7 @@ function renderPhaseLine() {
       line.innerHTML = `Génération ${next} · match de sélection, candidat contre champion : <b>${wdlCount(m)}</b> / ${matchGames} parties`;
       break;
     case "verify":
-      line.innerHTML = `Génération ${next} · le candidat a gagné, vérification sur de nouvelles ouvertures : <b>${wdlCount(v)}</b> / ${matchGames}`;
+      line.innerHTML = `Génération ${next} · le candidat a gagné la sélection, il doit confirmer sur de nouvelles ouvertures : <b>${wdlCount(v)}</b> / ${matchGames}`;
       break;
     default:
       line.textContent = "";
@@ -877,7 +877,8 @@ function renderLog() {
     ];
     for (const [text, cls] of cells) row.append(el("td", cls || "", text));
     const tagCell = el("td");
-    tagCell.append(el("span", "tag " + (g.accepted ? "tag-ok" : "tag-no"), g.accepted ? "Adopté" : "Rejeté"));
+    const tag = g.accepted ? "Adopté" : g.verification ? "Non confirmé" : "Rejeté";
+    tagCell.append(el("span", "tag " + (g.accepted ? "tag-ok" : "tag-no"), tag));
     row.append(tagCell);
     body.append(row);
   }
@@ -939,7 +940,14 @@ function drawEloChart() {
   const history = app.train.history;
   const box = chartBox(container);
   const points = [{ x: 0, y: 0, accepted: true, gen: 0 }].concat(
-    history.map((g) => ({ x: g.index, y: g.elo, accepted: g.accepted, gen: g.index, gain: g.elo_gain })),
+    history.map((g) => ({
+      x: g.index,
+      y: g.elo,
+      accepted: g.accepted,
+      confirmed: g.verification ? g.accepted : undefined,
+      gen: g.index,
+      gain: g.elo_gain,
+    })),
   );
   const maxX = Math.max(5, points[points.length - 1].x);
   let minY = Math.min(0, ...points.map((p) => p.y));
@@ -974,7 +982,7 @@ function drawEloChart() {
   container.innerHTML = svg;
   const hover = points.slice(1).map((p) => ({ ...p, px: sx(p.x), py: sy(p.y) }));
   attachTooltip(container, hover, (p) =>
-    `Génération ${p.gen} · ${fmtSigned(p.y)} ELO · ${p.accepted ? `adoptée (${fmtSigned(p.gain)})` : "rejetée"}`);
+    `Génération ${p.gen} · ${fmtSigned(p.y)} ELO · ${p.accepted ? `adoptée (${fmtSigned(p.gain)})` : p.confirmed === false ? "non confirmée" : "rejetée"}`);
 }
 
 function drawScoreChart() {

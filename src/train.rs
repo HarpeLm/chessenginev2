@@ -8,8 +8,9 @@
 //!    ces résultats (méthode de Texel : descente de gradient sur l'erreur entre
 //!    sigmoïde(évaluation) et résultat).
 //! 3. **Match** : le candidat affronte le champion, chaque ouverture étant jouée
-//!    avec les deux couleurs. S'il marque plus de 50 %, il devient champion.
-//! 4. **Vérification** : un second match indépendant mesure le gain réel d'ELO.
+//!    avec les deux couleurs. S'il marque plus de 50 %, il passe à la vérification.
+//! 4. **Vérification** : un second match indépendant doit confirmer le gain ;
+//!    sinon le candidat est écarté.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -90,7 +91,7 @@ pub struct GenerationSummary {
     pub selfplay: Wdl,
     /// Résultats du match de sélection, du point de vue du candidat.
     pub matchup: Wdl,
-    /// Match de vérification (seulement si le candidat a été adopté).
+    /// Match de vérification (seulement si le candidat a gagné la sélection).
     pub verification: Option<Wdl>,
     /// Gain d'ELO mesuré par la vérification (0 si le candidat est rejeté).
     pub elo_gain: f64,
@@ -281,13 +282,16 @@ fn run(app: Arc<App>, config: TrainConfig, stop: Arc<AtomicBool>) {
         ) else {
             break;
         };
-        let accepted = matchup.score() > 0.5;
+        let selected = matchup.score() > 0.5;
 
-        // 4. Vérification : un second match, sur d'autres ouvertures, mesure le
-        //    vrai gain. Le premier match a servi à choisir le candidat ; il
-        //    surestime donc son niveau (on retient les candidats chanceux).
+        // 4. Vérification : un second match, sur d'autres ouvertures. Le premier
+        //    match a servi à choisir le candidat ; il surestime donc son niveau
+        //    (on retient les candidats chanceux). Le candidat n'est adopté que
+        //    si la vérification confirme qu'il est meilleur, et c'est elle qui
+        //    mesure le gain d'ELO.
         let mut verification = None;
-        if accepted {
+        let mut accepted = false;
+        if selected {
             set_phase(&app, "verify");
             seed = next_random(seed);
             let Some(wdl) = run_match(
@@ -303,13 +307,19 @@ fn run(app: Arc<App>, config: TrainConfig, stop: Arc<AtomicBool>) {
                 break;
             };
             verification = Some(wdl);
-            app.set_champion(candidate.clone());
+            accepted = wdl.score() > 0.5;
+            if accepted {
+                app.set_champion(candidate.clone());
+            }
         }
 
         {
             let mut state = app.training.lock().unwrap();
             state.generation += 1;
-            let elo_gain = verification.map_or(0.0, |wdl| elo_difference(wdl.score()));
+            let elo_gain = match verification {
+                Some(wdl) if accepted => elo_difference(wdl.score()),
+                _ => 0.0,
+            };
             state.elo += elo_gain;
             let games_played = config.games_per_generation
                 + config.match_games * (1 + verification.is_some() as usize);

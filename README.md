@@ -56,8 +56,8 @@ L'évaluation est une somme pondérée d'environ 400 critères. Chaque critère 
 
 1. **Parties** : le champion joue contre lui-même depuis des ouvertures tirées au hasard. Chaque position calme est notée avec le résultat final de la partie.
 2. **Ajustement** : une descente de gradient cherche les poids dont l'évaluation prédit le mieux ces résultats. Un rappel vers les poids actuels évite qu'ils partent n'importe où quand les données manquent.
-3. **Match** : le candidat affronte le champion. Chaque ouverture est jouée deux fois, en inversant les couleurs. Le candidat devient champion s'il marque plus de 50 %.
-4. **Vérification** : un second match, sur d'autres ouvertures, mesure le vrai gain d'ELO. Le premier match a servi à choisir le candidat, il surestime donc son niveau.
+3. **Match** : le candidat affronte le champion. Chaque ouverture est jouée deux fois, en inversant les couleurs. S'il marque plus de 50 %, il passe à la vérification.
+4. **Vérification** : un second match, sur d'autres ouvertures. Le candidat ne devient champion que s'il gagne aussi ce match, et c'est lui qui mesure le gain d'ELO. Le premier match a servi à choisir le candidat, il surestime donc son niveau : un candidat chanceux peut le gagner sans être meilleur.
 
 Deux points de départ sont possibles, depuis le bouton « Réinitialiser » :
 
