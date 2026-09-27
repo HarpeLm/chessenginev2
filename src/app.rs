@@ -80,12 +80,7 @@ impl App {
             training: Mutex::new(training),
             train_stop: Mutex::new(Arc::new(AtomicBool::new(false))),
             last_candidate: Mutex::new(None),
-            measure: Mutex::new(
-                std::fs::read_to_string(data_dir.join("measures.json"))
-                    .ok()
-                    .and_then(|text| serde_json::from_str(&text).ok())
-                    .unwrap_or_default(),
-            ),
+            measure: Mutex::new(MeasureState::load(&data_dir.join("measures.json"))),
             measure_stop: Mutex::new(Arc::new(AtomicBool::new(false))),
             dataset: Mutex::new(Vec::new()),
             nnue_dataset: Mutex::new(positions),

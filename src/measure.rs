@@ -83,10 +83,31 @@ pub struct MeasureState {
     pub stockfish: Option<StockfishInfo>,
     #[serde(skip_deserializing)]
     pub error: Option<String>,
-    #[serde(skip_deserializing)]
+    /// Enregistrée après chaque partie : si l'application est fermée pendant
+    /// une mesure, les parties déjà jouées ne sont pas perdues.
+    #[serde(default)]
     pub current: Option<MeasureRun>,
     pub path: Option<String>,
     pub history: Vec<MeasureRun>,
+}
+
+impl MeasureState {
+    /// Relit les mesures enregistrées. Une mesure interrompue (application
+    /// fermée en cours de route) rejoint l'historique avec ses parties jouées.
+    pub fn load(path: &std::path::Path) -> MeasureState {
+        let mut state: MeasureState = std::fs::read_to_string(path)
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default();
+        if let Some(run) = state.current.take() {
+            let played = run.wdl.wins + run.wdl.draws + run.wdl.losses;
+            let known = state.history.iter().any(|h| h.started_at == run.started_at);
+            if played > 0 && !known {
+                state.history.push(run);
+            }
+        }
+        state
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -304,6 +325,7 @@ fn record(app: &App, opponent_elo: u32, score: f32, lost_on_time: Option<bool>) 
             run.points.push((played, estimate, margin));
         }
     }
+    app.save_measures();
     app.emit_measure();
 }
 
@@ -479,6 +501,45 @@ mod tests {
                 board = board.make_move(mv);
             }
         }
+    }
+
+    #[test]
+    fn interrupted_measure_is_kept() {
+        let run = MeasureRun {
+            started_at: 42,
+            opponent: "Stockfish".into(),
+            opponent_elo: 2000,
+            engine: "formule".into(),
+            games: 200,
+            base_ms: 30_000,
+            increment_ms: 300,
+            wdl: Wdl {
+                wins: 5,
+                draws: 1,
+                losses: 2,
+            },
+            estimate: Some(2100.0),
+            margin: Some(150.0),
+            finished: false,
+            time_losses: [0, 0],
+            points: Vec::new(),
+        };
+        let state = MeasureState {
+            current: Some(run),
+            ..MeasureState::default()
+        };
+        let path = std::env::temp_dir().join("chessengine-measures-test.json");
+        std::fs::write(&path, serde_json::to_string(&state).unwrap()).unwrap();
+        let loaded = MeasureState::load(&path);
+        assert!(loaded.current.is_none());
+        assert_eq!(loaded.history.len(), 1);
+        assert_eq!(loaded.history[0].wdl.wins, 5);
+        // Relue une seconde fois (déjà dans l'historique) : pas de doublon.
+        let mut again = loaded.clone();
+        again.current = Some(loaded.history[0].clone());
+        std::fs::write(&path, serde_json::to_string(&again).unwrap()).unwrap();
+        assert_eq!(MeasureState::load(&path).history.len(), 1);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
