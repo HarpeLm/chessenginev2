@@ -59,18 +59,20 @@ impl SearchLimits {
     }
 }
 
-/// Marge de sécurité pour ne jamais perdre au temps (communication avec l'interface).
+/// Marge de sécurité par défaut pour ne jamais perdre au temps (délai de
+/// communication avec l'interface ; sur Internet, il faut plus).
 pub const MOVE_OVERHEAD_MS: u64 = 30;
 
 /// Gestion du temps en partie avec pendule : combien réfléchir pour ce coup,
-/// selon le temps restant, l'incrément et le nombre de coups avant le
-/// prochain contrôle (30 par défaut).
+/// selon le temps restant, l'incrément, le nombre de coups avant le prochain
+/// contrôle (30 par défaut) et la marge de sécurité par coup.
 pub fn clock_limits(
     time_left_ms: u64,
     increment_ms: u64,
     moves_to_go: Option<u64>,
+    overhead_ms: u64,
 ) -> SearchLimits {
-    let available = time_left_ms.saturating_sub(MOVE_OVERHEAD_MS);
+    let available = time_left_ms.saturating_sub(overhead_ms);
     let moves_to_go = moves_to_go.unwrap_or(30).max(1);
     let soft = (available / moves_to_go + increment_ms * 3 / 4).min(available / 2);
     let hard = (soft * 3).min(available * 3 / 4).max(soft);

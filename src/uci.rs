@@ -20,6 +20,7 @@ pub fn run(weights: Arc<Evaluator>) {
     let mut handle: Option<JoinHandle<Searcher>> = None;
     let mut stop = Arc::new(AtomicBool::new(false));
     let mut pondering = Arc::new(AtomicBool::new(false));
+    let mut move_overhead = MOVE_OVERHEAD_MS;
 
     for line in io::stdin().lock().lines() {
         let Ok(line) = line else { break };
@@ -34,6 +35,9 @@ pub fn run(weights: Arc<Evaluator>) {
                 println!("id author HarpeLm");
                 println!("option name Hash type spin default 64 min 1 max 4096");
                 println!("option name Ponder type check default false");
+                println!(
+                    "option name Move Overhead type spin default {MOVE_OVERHEAD_MS} min 0 max 5000"
+                );
                 println!("uciok");
             }
             "isready" => println!("readyok"),
@@ -47,18 +51,31 @@ pub fn run(weights: Arc<Evaluator>) {
             "setoption" => {
                 interrupt(&stop, &pondering);
                 wait(&mut searcher, &mut handle);
-                let name = tokens
-                    .iter()
-                    .position(|&t| t == "name")
-                    .and_then(|i| tokens.get(i + 1));
-                let value = tokens
-                    .iter()
-                    .position(|&t| t == "value")
-                    .and_then(|i| tokens.get(i + 1));
-                if let (Some(&"Hash"), Some(value)) = (name, value) {
-                    if let Ok(mb) = value.parse() {
-                        searcher.as_mut().unwrap().resize_hash(mb);
+                // « setoption name Move Overhead value 100 » : le nom peut
+                // contenir des espaces.
+                let name_at = tokens.iter().position(|&t| t == "name");
+                let value_at = tokens.iter().position(|&t| t == "value");
+                let name = match name_at {
+                    Some(i) => tokens[i + 1..value_at.unwrap_or(tokens.len())].join(" "),
+                    None => String::new(),
+                };
+                let value = value_at
+                    .map(|i| tokens[i + 1..].join(" "))
+                    .unwrap_or_default();
+                match name.to_ascii_lowercase().as_str() {
+                    "hash" => {
+                        if let Ok(mb) = value.parse() {
+                            searcher.as_mut().unwrap().resize_hash(mb);
+                        }
                     }
+                    "move overhead" => {
+                        if let Ok(ms) = value.parse::<u64>() {
+                            move_overhead = ms.min(5000);
+                        }
+                    }
+                    // Géré par l'interface (« go ponder ») : rien à faire ici.
+                    "ponder" => {}
+                    _ => println!("info string option inconnue ignorée : {name}"),
                 }
             }
             "position" => {
@@ -75,7 +92,7 @@ pub fn run(weights: Arc<Evaluator>) {
             "go" => {
                 interrupt(&stop, &pondering);
                 wait(&mut searcher, &mut handle);
-                let (limits, infinite) = parse_go(&tokens, &board);
+                let (limits, infinite) = parse_go(&tokens, &board, move_overhead);
                 stop = Arc::new(AtomicBool::new(false));
                 // « go ponder » : on réfléchit sur le temps de l'adversaire jusqu'à
                 // « ponderhit » (il a joué le coup prévu) ou « stop » (autre coup).
@@ -187,7 +204,7 @@ fn parse_position(tokens: &[&str]) -> Result<(Board, Vec<u64>), String> {
     Ok((board, history))
 }
 
-fn parse_go(tokens: &[&str], board: &Board) -> (SearchLimits, bool) {
+fn parse_go(tokens: &[&str], board: &Board, overhead_ms: u64) -> (SearchLimits, bool) {
     let value = |name: &str| -> Option<i64> {
         let i = tokens.iter().position(|&t| t == name)?;
         tokens.get(i + 1)?.parse().ok()
@@ -203,7 +220,7 @@ fn parse_go(tokens: &[&str], board: &Board) -> (SearchLimits, bool) {
         return (limits, true);
     }
     if let Some(ms) = value("movetime") {
-        let ms = (ms.max(1) as u64).saturating_sub(MOVE_OVERHEAD_MS).max(1);
+        let ms = (ms.max(1) as u64).saturating_sub(overhead_ms).max(1);
         limits.soft_time = Some(Duration::from_millis(ms));
         limits.hard_time = Some(Duration::from_millis(ms));
         return (limits, false);
@@ -217,6 +234,7 @@ fn parse_go(tokens: &[&str], board: &Board) -> (SearchLimits, bool) {
             time.max(0) as u64,
             increment.unwrap_or(0).max(0) as u64,
             value("movestogo").map(|m| m.max(1) as u64),
+            overhead_ms,
         );
         limits.soft_time = clock.soft_time;
         limits.hard_time = clock.hard_time;

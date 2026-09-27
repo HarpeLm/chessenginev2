@@ -19,7 +19,7 @@ use crate::board::{Board, Color};
 use crate::eval::Evaluator;
 use crate::external::{find_stockfish, UciEngine};
 use crate::movegen::{legal_moves, parse_uci_move};
-use crate::search::{clock_limits, Searcher};
+use crate::search::{clock_limits, Searcher, MOVE_OVERHEAD_MS};
 use crate::train::Wdl;
 
 /// Ouvertures équilibrées, jouées chacune deux fois (une fois de chaque couleur).
@@ -403,7 +403,12 @@ fn play_game(
         let side = board.side_to_move.index();
         let started = Instant::now();
         let text = if board.side_to_move == our_color {
-            let limits = clock_limits(clocks[side].max(0) as u64, config.increment_ms, None);
+            let limits = clock_limits(
+                clocks[side].max(0) as u64,
+                config.increment_ms,
+                None,
+                MOVE_OVERHEAD_MS,
+            );
             let result = searcher.search(
                 &board,
                 &history,
