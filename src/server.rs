@@ -16,6 +16,7 @@ use serde_json::{json, Value};
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::{Stream, StreamExt};
 
+use crate::analysis;
 use crate::app::App;
 use crate::game;
 use crate::measure::{self, MeasureConfig};
@@ -74,6 +75,11 @@ pub async fn serve(app: Arc<App>, port: u16, open_browser: bool) {
         .route("/api/train/start", post(train_start))
         .route("/api/train/stop", post(train_stop))
         .route("/api/train/reset", post(train_reset))
+        .route("/api/analysis", get(analysis_state))
+        .route("/api/analysis/move", post(analysis_move))
+        .route("/api/analysis/goto", post(analysis_goto))
+        .route("/api/analysis/reset", post(analysis_reset))
+        .route("/api/analysis/stop", post(analysis_stop))
         .route("/api/measure", get(measure_state))
         .route("/api/measure/detect", post(measure_detect))
         .route("/api/measure/start", post(measure_start))
@@ -279,4 +285,40 @@ async fn measure_start(State(app): Shared, Json(body): Json<MeasureStart>) -> Re
 async fn measure_stop(State(app): Shared) -> Json<Value> {
     measure::stop(&app);
     Json(json!({ "ok": true }))
+}
+
+async fn analysis_state(State(app): Shared) -> Json<Value> {
+    Json(app.analysis.lock().unwrap().view())
+}
+
+async fn analysis_move(State(app): Shared, Json(body): Json<PlayMove>) -> Response {
+    match analysis::play(&app, &body.uci) {
+        Ok(view) => Json(view).into_response(),
+        Err(message) => error(message),
+    }
+}
+
+#[derive(Deserialize)]
+struct AnalysisGoto {
+    index: usize,
+}
+
+async fn analysis_goto(State(app): Shared, Json(body): Json<AnalysisGoto>) -> Json<Value> {
+    Json(analysis::goto(&app, body.index))
+}
+
+#[derive(Deserialize)]
+struct AnalysisReset {
+    fen: Option<String>,
+}
+
+async fn analysis_reset(State(app): Shared, Json(body): Json<AnalysisReset>) -> Response {
+    match analysis::reset(&app, body.fen.as_deref()) {
+        Ok(view) => Json(view).into_response(),
+        Err(message) => error(format!("position invalide : {message}")),
+    }
+}
+
+async fn analysis_stop(State(app): Shared) -> Json<Value> {
+    Json(analysis::stop(&app))
 }

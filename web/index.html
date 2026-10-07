@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>chessengine</title>
+  <link rel="icon" href="data:,">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Jost:wght@300;400;500&display=swap" rel="stylesheet">
@@ -21,6 +22,7 @@
     </div>
     <nav class="tabs" role="tablist">
       <button class="tab is-active" data-view="play" role="tab">Partie</button>
+      <button class="tab" data-view="analysis" role="tab">Analyse</button>
       <button class="tab" data-view="train" role="tab">Entraînement</button>
       <button class="tab" data-view="measure" role="tab">Mesure</button>
     </nav>
@@ -97,6 +99,90 @@
           <button class="button button-icon" id="flip" title="Retourner l'échiquier" aria-label="Retourner l'échiquier">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v14m0 0-3-3m3 3 3-3M17 20V6m0 0-3 3m3-3 3 3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
           </button>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <!-- ─────────────── Analyse ─────────────── -->
+  <main class="view view-play view-analysis" id="view-analysis" hidden>
+    <section class="board-column">
+      <div class="player-row" id="a-player-top"></div>
+      <div class="board-frame">
+        <div class="evalbar" id="a-evalbar" aria-hidden="true">
+          <div class="evalbar-fill" id="a-evalbar-fill"></div>
+          <span class="evalbar-label" id="a-evalbar-label"></span>
+        </div>
+        <div class="board-holder">
+          <div class="board" id="analysis-board"></div>
+        </div>
+      </div>
+      <div class="player-row" id="a-player-bottom"></div>
+    </section>
+
+    <aside class="side">
+      <section class="panel engine-panel">
+        <header class="panel-head">
+          <h2 class="eyebrow">Analyse du moteur</h2>
+          <span class="thinking-dot" id="a-thinking-dot" hidden></span>
+          <button class="link-button" id="a-hint-toggle">Masquer le conseil</button>
+        </header>
+        <div class="eval-line">
+          <span class="eval-big" id="a-eval-big">0,00</span>
+          <span class="eval-caption" id="a-eval-caption">en attente</span>
+        </div>
+        <div class="best-line">
+          <span class="pv-label">Meilleur coup</span>
+          <span class="best-move" id="a-best">–</span>
+          <button class="button button-small" id="a-play-best">Le jouer</button>
+        </div>
+        <dl class="stats">
+          <div><dt>Profondeur</dt><dd id="a-st-depth">–</dd></div>
+          <div><dt>Positions</dt><dd id="a-st-nodes">–</dd></div>
+          <div><dt>Vitesse</dt><dd id="a-st-nps">–</dd></div>
+          <div><dt>Temps</dt><dd id="a-st-time">–</dd></div>
+        </dl>
+        <div class="pv" id="a-pv-block">
+          <span class="pv-label">Suite prévue</span>
+          <p class="pv-moves" id="a-pv">–</p>
+        </div>
+      </section>
+
+      <section class="panel verdict-panel">
+        <header class="panel-head"><h2 class="eyebrow">Le dernier coup</h2></header>
+        <p class="verdict" id="a-verdict">Joue un coup : le moteur te dira s’il était bon.</p>
+      </section>
+
+      <section class="panel moves-panel">
+        <header class="panel-head"><h2 class="eyebrow">Coups</h2></header>
+        <ol class="moves moves-clickable" id="a-moves"></ol>
+      </section>
+
+      <section class="panel controls">
+        <div class="button-row nav-row">
+          <button class="button button-icon" id="a-first" title="Début" aria-label="Début">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 6v12M18 6l-7 6 7 6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <button class="button button-icon" id="a-prev" title="Coup précédent (←)" aria-label="Coup précédent">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-7 6 7 6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <button class="button button-icon" id="a-next" title="Coup suivant (→)" aria-label="Coup suivant">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l7 6-7 6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <button class="button button-icon" id="a-last" title="Fin" aria-label="Fin">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 6v12M6 6l7 6-7 6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <button class="button button-icon" id="a-flip" title="Retourner l'échiquier" aria-label="Retourner l'échiquier">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v14m0 0-3-3m3 3 3-3M17 20V6m0 0-3 3m3-3 3 3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+        <div class="button-row">
+          <button class="button button-primary" id="a-reset">Nouvelle analyse</button>
+          <button class="button" id="a-fen-toggle">Position FEN</button>
+        </div>
+        <div class="fen-row" id="a-fen-row" hidden>
+          <input type="text" id="a-fen" placeholder="Colle une position FEN" spellcheck="false">
+          <button class="button" id="a-fen-load">Charger</button>
         </div>
       </section>
     </aside>

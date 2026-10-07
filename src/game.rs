@@ -59,40 +59,7 @@ impl Game {
 
     /// État de la partie : code et phrase à afficher.
     fn status(&self) -> (&'static str, Option<String>) {
-        let board = self.board();
-        if legal_moves(board).is_empty() {
-            if board.in_check() {
-                let winner = if board.side_to_move == Color::White {
-                    "les Noirs"
-                } else {
-                    "les Blancs"
-                };
-                return (
-                    "checkmate",
-                    Some(format!("Échec et mat. Victoire pour {winner}.")),
-                );
-            }
-            return ("stalemate", Some("Pat. Partie nulle.".into()));
-        }
-        if board.halfmove_clock >= 100 {
-            return (
-                "draw",
-                Some("Nulle par la règle des cinquante coups.".into()),
-            );
-        }
-        if self
-            .positions
-            .iter()
-            .filter(|b| b.hash == board.hash)
-            .count()
-            >= 3
-        {
-            return ("draw", Some("Nulle par triple répétition.".into()));
-        }
-        if board.is_insufficient_material() {
-            return ("draw", Some("Nulle, matériel insuffisant.".into()));
-        }
-        ("playing", None)
+        position_status(&self.positions)
     }
 
     fn is_over(&self) -> bool {
@@ -129,15 +96,49 @@ impl Game {
     }
 }
 
-fn color_code(color: Color) -> &'static str {
+/// État de la dernière position d'une suite de positions : partie en cours,
+/// mat, pat ou nulle (50 coups, triple répétition, matériel insuffisant).
+pub fn position_status(positions: &[Board]) -> (&'static str, Option<String>) {
+    let board = positions.last().expect("au moins une position");
+    if legal_moves(board).is_empty() {
+        if board.in_check() {
+            let winner = if board.side_to_move == Color::White {
+                "les Noirs"
+            } else {
+                "les Blancs"
+            };
+            return (
+                "checkmate",
+                Some(format!("Échec et mat. Victoire pour {winner}.")),
+            );
+        }
+        return ("stalemate", Some("Pat. Partie nulle.".into()));
+    }
+    if board.halfmove_clock >= 100 {
+        return (
+            "draw",
+            Some("Nulle par la règle des cinquante coups.".into()),
+        );
+    }
+    if positions.iter().filter(|b| b.hash == board.hash).count() >= 3 {
+        return ("draw", Some("Nulle par triple répétition.".into()));
+    }
+    if board.is_insufficient_material() {
+        return ("draw", Some("Nulle, matériel insuffisant.".into()));
+    }
+    ("playing", None)
+}
+
+pub fn color_code(color: Color) -> &'static str {
     match color {
         Color::White => "w",
         Color::Black => "b",
     }
 }
 
-/// Résumé de la réflexion du moteur pour l'affichage (score du point de vue des Blancs).
-fn think_payload(board: &Board, info: &SearchInfo) -> Value {
+/// Résumé de la réflexion du moteur pour l'affichage (score du point de vue
+/// des Blancs, ligne principale en notation SAN et UCI).
+pub fn think_payload(board: &Board, info: &SearchInfo) -> Value {
     let sign = if board.side_to_move == Color::White {
         1
     } else {
@@ -158,6 +159,7 @@ fn think_payload(board: &Board, info: &SearchInfo) -> Value {
         "nps": info.nodes * 1000 / ms,
         "time_ms": ms,
         "pv": pv,
+        "pv_uci": info.pv.iter().map(|m| m.to_uci()).collect::<Vec<_>>(),
         "pv_start": board.fullmove_number,
         "pv_turn": color_code(board.side_to_move),
     })

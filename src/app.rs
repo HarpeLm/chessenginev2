@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use serde_json::{json, Value};
 use tokio::sync::broadcast;
 
+use crate::analysis::Analysis;
 use crate::eval::{Evaluator, Weights};
 use crate::game::Game;
 use crate::measure::MeasureState;
@@ -37,6 +38,11 @@ pub struct App {
     pub game: Mutex<Game>,
     pub engine: Mutex<Searcher>,
     pub engine_stop: Mutex<Arc<AtomicBool>>,
+    /// Mode analyse : sa partie, son moteur (séparé de celui de la partie) et
+    /// le drapeau qui arrête l'analyse en cours.
+    pub analysis: Mutex<Analysis>,
+    pub analysis_engine: Mutex<Searcher>,
+    pub analysis_stop: Mutex<Arc<AtomicBool>>,
     pub training: Mutex<TrainState>,
     pub train_stop: Mutex<Arc<AtomicBool>>,
     /// Mesures du niveau contre Stockfish.
@@ -77,6 +83,9 @@ impl App {
             game: Mutex::new(Game::new(crate::board::Color::White, 2000)),
             engine: Mutex::new(Searcher::new(64)),
             engine_stop: Mutex::new(Arc::new(AtomicBool::new(false))),
+            analysis: Mutex::new(Analysis::new(crate::board::Board::start_position())),
+            analysis_engine: Mutex::new(Searcher::new(64)),
+            analysis_stop: Mutex::new(Arc::new(AtomicBool::new(false))),
             training: Mutex::new(training),
             train_stop: Mutex::new(Arc::new(AtomicBool::new(false))),
             last_candidate: Mutex::new(None),

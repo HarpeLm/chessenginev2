@@ -95,7 +95,12 @@ class BoardView {
     root.innerHTML = "";
     this.squaresEl = el("div", "squares");
     this.piecesEl = el("div", "pieces");
-    root.append(this.squaresEl, this.piecesEl);
+    // Calque des flèches (coup conseillé), au-dessus des pièces.
+    this.arrowsEl = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    this.arrowsEl.setAttribute("class", "arrows");
+    this.arrowsEl.setAttribute("viewBox", "0 0 8 8");
+    this.arrows = [];
+    root.append(this.squaresEl, this.piecesEl, this.arrowsEl);
     this.buildSquares();
 
     if (options.interactive) {
@@ -144,10 +149,32 @@ class BoardView {
     }
   }
 
+  /** Dessine des flèches : [{ from: "g1", to: "f3" }, …]. */
+  setArrows(arrows) {
+    this.arrows = arrows;
+    let svg = "";
+    for (const { from, to } of arrows) {
+      const [c1, r1] = this.colRow(squareIndex(from));
+      const [c2, r2] = this.colRow(squareIndex(to));
+      const [x1, y1, x2, y2] = [c1 + 0.5, r1 + 0.5, c2 + 0.5, r2 + 0.5];
+      const length = Math.hypot(x2 - x1, y2 - y1);
+      const [ux, uy] = [(x2 - x1) / length, (y2 - y1) / length];
+      // La flèche s'arrête un peu avant le centre de la case d'arrivée.
+      const head = 0.42;
+      const [ex, ey] = [x2 - ux * 0.12, y2 - uy * 0.12];
+      const [bx, by] = [ex - ux * head, ey - uy * head];
+      const [px, py] = [-uy * 0.26, ux * 0.26];
+      svg += `<line x1="${x1 + ux * 0.18}" y1="${y1 + uy * 0.18}" x2="${bx}" y2="${by}" />`;
+      svg += `<polygon points="${ex},${ey} ${bx + px},${by + py} ${bx - px},${by - py}" />`;
+    }
+    this.arrowsEl.innerHTML = svg;
+  }
+
   setOrientation(orientation) {
     if (orientation === this.orientation) return;
     this.orientation = orientation;
     this.buildSquares();
+    this.setArrows(this.arrows);
     for (const [sq, pieceEl] of this.pieceEls) this.place(pieceEl, sq, false);
     this.renderMarks();
   }
@@ -391,11 +418,22 @@ const app = {
   heatPiece: 1,
   heatPhase: "mg",
   lastEpoch: null,
+  // Onglet Analyse.
+  analysis: null,
+  analysisOrientation: "w",
+  analysisHint: true,
+  /** Analyse la plus profonde connue pour chaque position (clé : FEN). */
+  analysisInfos: {},
+  /** FEN de chaque position visitée (clé : position de départ + coups joués). */
+  analysisFens: {},
+  /** Positions finales (mat, pat, nulle) : FEN → code de statut. */
+  analysisTerminal: {},
 };
 
 const board = new BoardView($("#board"), { interactive: true, onMove: playMove });
 const liveBoard = new BoardView($("#live-board"));
 const measureBoard = new BoardView($("#measure-board"));
+const analysisBoard = new BoardView($("#analysis-board"), { interactive: true, onMove: analysisMove });
 
 /* ═══════════════════════════ Partie ═══════════════════════════ */
 
@@ -509,17 +547,18 @@ function renderMoves(game) {
   list.scrollTop = list.scrollHeight;
 }
 
-function renderEngine(info, thinking) {
-  $("#thinking-dot").hidden = !thinking;
+/** Panneau du moteur. `p` : préfixe des identifiants ("a-" pour l'onglet Analyse). */
+function renderEngine(info, thinking, p = "", orientation = app.orientation) {
+  $(`#${p}thinking-dot`).hidden = !thinking;
   if (!info) {
-    $("#eval-big").textContent = fmtEval(null);
-    $("#eval-caption").textContent = thinking ? "le moteur réfléchit" : "en attente";
-    for (const id of ["st-depth", "st-nodes", "st-nps", "st-time"]) $("#" + id).textContent = "–";
-    $("#pv").textContent = "–";
-    setEvalBar(null);
+    $(`#${p}eval-big`).textContent = fmtEval(null);
+    $(`#${p}eval-caption`).textContent = thinking ? "le moteur réfléchit" : "en attente";
+    for (const id of ["st-depth", "st-nodes", "st-nps", "st-time"]) $(`#${p}${id}`).textContent = "–";
+    $(`#${p}pv`).textContent = "–";
+    setEvalBar(null, p, orientation);
     return;
   }
-  $("#eval-big").textContent = fmtEval(info);
+  $(`#${p}eval-big`).textContent = fmtEval(info);
   let caption;
   if (info.mate !== null && info.mate !== undefined) {
     caption = `mat en ${Math.abs(info.mate)} pour les ${info.mate > 0 ? "Blancs" : "Noirs"}`;
@@ -528,13 +567,13 @@ function renderEngine(info, thinking) {
   } else {
     caption = `avantage ${info.cp > 0 ? "Blancs" : "Noirs"}`;
   }
-  $("#eval-caption").textContent = caption;
-  $("#st-depth").textContent = info.depth;
-  $("#st-nodes").textContent = fmtCompact(info.nodes);
-  $("#st-nps").textContent = fmtCompact(info.nps) + "/s";
-  $("#st-time").textContent = fmtDecimal(info.time_ms / 1000, 1) + " s";
+  $(`#${p}eval-caption`).textContent = caption;
+  $(`#${p}st-depth`).textContent = info.depth;
+  $(`#${p}st-nodes`).textContent = fmtCompact(info.nodes);
+  $(`#${p}st-nps`).textContent = fmtCompact(info.nps) + "/s";
+  $(`#${p}st-time`).textContent = fmtDecimal(info.time_ms / 1000, 1) + " s";
 
-  const pv = $("#pv");
+  const pv = $(`#${p}pv`);
   pv.innerHTML = "";
   let number = info.pv_start;
   let white = info.pv_turn === "w";
@@ -547,10 +586,10 @@ function renderEngine(info, thinking) {
     if (!white) number += 1;
     white = !white;
   });
-  setEvalBar(info);
+  setEvalBar(info, p, orientation);
 }
 
-function setEvalBar(info) {
+function setEvalBar(info, p = "", orientation = app.orientation) {
   let share = 0.5;
   let label = "";
   if (info) {
@@ -562,15 +601,258 @@ function setEvalBar(info) {
       label = fmtDecimal(Math.abs(info.cp) / 100, 1);
     }
   }
-  const bar = $("#evalbar");
-  bar.classList.toggle("is-flipped", app.orientation === "b");
-  $("#evalbar-fill").style.height = `${share * 100}%`;
-  const labelEl = $("#evalbar-label");
+  const bar = $(`#${p}evalbar`);
+  bar.classList.toggle("is-flipped", orientation === "b");
+  $(`#${p}evalbar-fill`).style.height = `${share * 100}%`;
+  const labelEl = $(`#${p}evalbar-label`);
   labelEl.textContent = label;
   const whiteAhead = share >= 0.5;
   // Le chiffre s'affiche du côté du camp qui mène.
-  const atBottom = (app.orientation === "w") === whiteAhead;
+  const atBottom = (orientation === "w") === whiteAhead;
   labelEl.classList.toggle("is-top", !atBottom);
+}
+
+/* ═══════════════════════════ Analyse ═══════════════════════════ */
+
+/** Clé d'une position de la partie analysée : départ + coups joués jusque-là. */
+function lineKey(view, index) {
+  return `${view.start_fen}|${view.ucis.slice(0, index).join(" ")}`;
+}
+
+async function analysisMove(uci) {
+  try {
+    renderAnalysis(await api("/api/analysis/move", { uci }));
+  } catch (error) {
+    toast(error.message);
+    renderAnalysis(await api("/api/analysis"));
+  }
+}
+
+async function analysisGoto(index) {
+  try {
+    renderAnalysis(await api("/api/analysis/goto", { index }));
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+function currentAnalysisInfo() {
+  return app.analysis ? app.analysisInfos[app.analysis.fen] : null;
+}
+
+function renderAnalysis(view) {
+  app.analysis = view;
+  app.analysisFens[lineKey(view, view.index)] = view.fen;
+  if (view.status !== "playing") app.analysisTerminal[view.fen] = view.status;
+  analysisBoard.setOrientation(app.analysisOrientation);
+  analysisBoard.setPosition(view.fen, { lastMove: view.last_move, check: view.check });
+  analysisBoard.setLegal(view.legal);
+  renderAnalysisPlayers(view);
+  renderAnalysisMoves(view);
+  renderAnalysisEngine();
+  renderVerdict();
+  $("#a-first").disabled = view.index === 0;
+  $("#a-prev").disabled = view.index === 0;
+  $("#a-next").disabled = view.index >= view.ucis.length;
+  $("#a-last").disabled = view.index >= view.ucis.length;
+}
+
+function renderAnalysisPlayers(view) {
+  const material = materialInfo(view.fen);
+  const bottom = app.analysisOrientation;
+  const top = bottom === "w" ? "b" : "w";
+  const fill = (container, color) => {
+    container.innerHTML = "";
+    container.append(
+      el("span", "player-chip " + (color === "w" ? "is-white" : "is-black")),
+      el("span", "player-name", color === "w" ? "Blancs" : "Noirs"),
+    );
+    const captured = el("span", "player-captured");
+    for (const code of material.captured[color]) {
+      const img = el("img");
+      img.src = `/pieces/${code}.svg`;
+      img.alt = "";
+      captured.append(img);
+    }
+    container.append(captured);
+    const advantage = color === "w" ? material.points : -material.points;
+    if (advantage > 0) container.append(el("span", "player-advantage", `+${advantage}`));
+    if (view.turn === color && view.status === "playing") container.append(el("span", "player-status", "au trait"));
+  };
+  fill($("#a-player-top"), top);
+  fill($("#a-player-bottom"), bottom);
+}
+
+function renderAnalysisEngine() {
+  const view = app.analysis;
+  if (!view) return;
+  const info = currentAnalysisInfo();
+  const over = view.status !== "playing";
+  renderEngine(info, view.analyzing, "a-", app.analysisOrientation);
+  if (over) {
+    $("#a-eval-big").textContent = view.status === "checkmate" ? "Mat" : "½ – ½";
+    $("#a-eval-caption").textContent = view.result || "";
+  }
+  const hint = app.analysisHint;
+  const best = $("#a-best");
+  $("#a-hint-toggle").textContent = hint ? "Masquer le conseil" : "Montrer le conseil";
+  $("#a-pv-block").hidden = !hint;
+  const hasMove = info && !over && info.pv_uci.length;
+  $("#a-play-best").disabled = !hasMove;
+  if (!hasMove) {
+    best.textContent = "–";
+    best.classList.remove("is-hidden");
+    analysisBoard.setArrows([]);
+  } else if (hint) {
+    best.textContent = info.pv[0];
+    best.classList.remove("is-hidden");
+    analysisBoard.setArrows([{ from: info.pv_uci[0].slice(0, 2), to: info.pv_uci[0].slice(2, 4) }]);
+  } else {
+    best.textContent = "masqué";
+    best.classList.add("is-hidden");
+    analysisBoard.setArrows([]);
+  }
+}
+
+const QUALITIES = {
+  best: { label: "Meilleur coup", cls: "q-best", mark: "" },
+  good: { label: "Bon coup", cls: "q-good", mark: "" },
+  inaccuracy: { label: "Imprécision", cls: "q-inaccuracy", mark: "?!" },
+  mistake: { label: "Erreur", cls: "q-mistake", mark: "?" },
+  blunder: { label: "Gaffe", cls: "q-blunder", mark: "??" },
+};
+
+/** Score du point de vue des Blancs, borné (un mat compte comme un gros avantage). */
+function whiteScore(info) {
+  if (info.mate !== null && info.mate !== undefined) return Math.sign(info.mate) * 2000;
+  return Math.max(-2000, Math.min(2000, info.cp));
+}
+
+/**
+ * Jugement du coup qui mène à la position n° `k` : on compare l'évaluation
+ * avant le coup (avec le meilleur coup) à celle après le coup joué.
+ */
+function moveVerdict(view, k) {
+  const fenBefore = app.analysisFens[lineKey(view, k - 1)];
+  const fenAfter = app.analysisFens[lineKey(view, k)];
+  const before = fenBefore && app.analysisInfos[fenBefore];
+  if (!before || !before.pv_uci.length) return null;
+  const played = view.ucis[k - 1];
+  const mover = fenBefore.split(" ")[1];
+  const sign = mover === "w" ? 1 : -1;
+  // Un mat trouvé est une certitude ; sinon on se méfie des analyses trop courtes.
+  const settled = (info) => (info.mate !== null && info.mate !== undefined) || info.depth >= 8;
+  const result = { bestSan: before.pv[0], provisional: !settled(before), loss: 0 };
+  if (before.pv_uci[0] === played) return { ...result, quality: "best" };
+
+  let afterScore;
+  const terminal = fenAfter && app.analysisTerminal[fenAfter];
+  if (terminal === "checkmate") return { ...result, quality: "best" };
+  if (terminal) {
+    afterScore = 0;
+  } else {
+    const after = fenAfter && app.analysisInfos[fenAfter];
+    if (!after) return null;
+    afterScore = whiteScore(after);
+    result.provisional = result.provisional || !settled(after);
+    // Le coup laisse un mat à l'adversaire, ou rate un mat qu'on avait.
+    if (after.mate !== null && after.mate !== undefined && Math.sign(after.mate) === -sign) {
+      result.allowsMate = Math.abs(after.mate);
+    } else if (before.mate !== null && before.mate !== undefined && Math.sign(before.mate) === sign) {
+      result.missedMate = Math.abs(before.mate);
+    }
+  }
+  const loss = (whiteScore(before) - afterScore) * sign;
+  result.loss = Math.max(0, loss);
+  let quality = "blunder";
+  if (loss <= 30) quality = "good";
+  else if (loss <= 90) quality = "inaccuracy";
+  else if (loss <= 220) quality = "mistake";
+  return { ...result, quality };
+}
+
+/** Numéro de coup à afficher pour le coup n° `k` (« 12. » ou « 12… »). */
+function moveNumber(view, k) {
+  const ply = k - 1 + (view.start_turn === "b" ? 1 : 0);
+  const number = view.start_fullmove + Math.floor(ply / 2);
+  return ply % 2 === 0 ? `${number}.` : `${number}…`;
+}
+
+function renderVerdict() {
+  const view = app.analysis;
+  const box = $("#a-verdict");
+  if (!view) return;
+  const k = view.index;
+  if (k === 0) {
+    box.textContent = view.ucis.length
+      ? "Position de départ. Avance dans la partie pour voir le jugement de chaque coup."
+      : "Joue un coup, pour les Blancs ou pour les Noirs : le moteur te dira s’il était bon.";
+    return;
+  }
+  const san = view.sans[k - 1];
+  const verdict = moveVerdict(view, k);
+  box.innerHTML = "";
+  if (!verdict) {
+    box.append(el("b", "", `${moveNumber(view, k)} ${san}`), el("span", "pending", "  analyse en cours…"));
+    return;
+  }
+  const quality = QUALITIES[verdict.quality];
+  box.append(el("span", `tag ${quality.cls}`, quality.label), el("b", "", `${moveNumber(view, k)} ${san}`));
+  if (verdict.quality === "best") {
+    box.append(document.createTextNode(" : c’est le coup que le moteur aurait joué."));
+  } else {
+    const pawns = verdict.loss / 100;
+    let lost = pawns >= 0.05 ? ` Tu perds environ ${fmtDecimal(pawns, 1)} pion${pawns >= 2 ? "s" : ""}.` : "";
+    if (verdict.allowsMate) lost = ` Tu laisses un mat en ${verdict.allowsMate}.`;
+    else if (verdict.missedMate) lost = ` Tu rates un mat en ${verdict.missedMate}.`;
+    box.append(document.createTextNode(`.${lost} Le moteur préférait `), el("b", "q-best", verdict.bestSan), document.createTextNode("."));
+  }
+  if (verdict.provisional) box.append(el("span", "pending", " (analyse encore courte, le jugement peut changer)"));
+}
+
+function renderAnalysisMoves(view) {
+  if (!view) return;
+  const list = $("#a-moves");
+  list.innerHTML = "";
+  if (!view.sans.length) {
+    list.append(el("li", "moves-empty", "Les coups joués s’afficheront ici. Clique sur un coup pour y revenir."));
+    return;
+  }
+  const cells = view.start_turn === "b" ? [null] : [];
+  view.sans.forEach((_, i) => cells.push(i + 1));
+  for (let i = 0; i < cells.length; i += 2) {
+    const item = el("li");
+    item.append(el("span", "num", `${view.start_fullmove + i / 2}.`));
+    for (const k of [cells[i], cells[i + 1]]) {
+      if (k === undefined) {
+        item.append(el("span"));
+        continue;
+      }
+      if (k === null) {
+        item.append(el("span", "mv muted", "…"));
+        continue;
+      }
+      const move = el("span", "mv", view.sans[k - 1]);
+      if (k === view.index) move.classList.add("is-current");
+      const verdict = moveVerdict(view, k);
+      if (verdict && QUALITIES[verdict.quality].mark) {
+        const quality = QUALITIES[verdict.quality];
+        move.append(el("span", `mark ${quality.cls}`, quality.mark));
+        move.title = quality.label;
+      }
+      move.addEventListener("click", () => analysisGoto(k));
+      item.append(move);
+    }
+    list.append(item);
+  }
+  // Garde le coup affiché visible, en ne faisant défiler que la liste.
+  const current = $(".is-current", list);
+  if (current && app.analysisScrolledTo !== view.index) {
+    app.analysisScrolledTo = view.index;
+    const r = current.getBoundingClientRect();
+    const box = list.getBoundingClientRect();
+    if (r.top < box.top || r.bottom > box.bottom) list.scrollTop += r.top - box.top - box.height / 2;
+  }
 }
 
 /* ═══════════════════════════ Entraînement ═══════════════════════════ */
@@ -1417,6 +1699,19 @@ const handlers = {
   train_live(message) {
     onLive(message);
   },
+  analysis_state(message) {
+    if (!app.analysis || message.analysis.id >= app.analysis.id) renderAnalysis(message.analysis);
+  },
+  analysis_info(message) {
+    const previous = app.analysisInfos[message.fen];
+    // On garde l'analyse la plus profonde : une position revisitée repart de
+    // la profondeur 1, inutile d'afficher moins bien que ce qu'on savait.
+    if (!previous || message.info.depth >= previous.depth) app.analysisInfos[message.fen] = message.info;
+    if (!app.analysis) return;
+    if (message.fen === app.analysis.fen) renderAnalysisEngine();
+    renderVerdict();
+    renderAnalysisMoves(app.analysis);
+  },
   measure_state(message) {
     app.measure = message.state;
     renderMeasure();
@@ -1447,9 +1742,13 @@ function connectEvents() {
 /* ═══════════════════════════ Contrôles ═══════════════════════════ */
 
 function setView(view) {
-  app.view = view;
   $$(".tab").forEach((tab) => tab.classList.toggle("is-active", tab.dataset.view === view));
-  for (const name of ["play", "train", "measure"]) $(`#view-${name}`).hidden = view !== name;
+  const leavingAnalysis = app.view !== view && app.view === "analysis";
+  app.view = view;
+  for (const name of ["play", "analysis", "train", "measure"]) $(`#view-${name}`).hidden = view !== name;
+  // L'analyse tourne seulement quand l'onglet est affiché (elle occupe un cœur).
+  if (view === "analysis" && app.analysis) analysisGoto(app.analysis.index);
+  if (leavingAnalysis) api("/api/analysis/stop", {}).catch(() => {});
   if (view === "train") requestAnimationFrame(renderTraining);
   if (view === "measure") requestAnimationFrame(renderMeasure);
   try { localStorage.setItem("chessengine.view", view); } catch (_) { /* stockage indisponible */ }
@@ -1569,6 +1868,57 @@ function bindControls() {
     }
   });
 
+  // Onglet Analyse.
+  try { app.analysisHint = localStorage.getItem("chessengine.hint") !== "off"; } catch (_) { /* stockage indisponible */ }
+  const step = (delta) => {
+    if (!app.analysis) return;
+    const index = Math.max(0, Math.min(app.analysis.ucis.length, app.analysis.index + delta));
+    if (index !== app.analysis.index) analysisGoto(index);
+  };
+  $("#a-first").addEventListener("click", () => analysisGoto(0));
+  $("#a-prev").addEventListener("click", () => step(-1));
+  $("#a-next").addEventListener("click", () => step(1));
+  $("#a-last").addEventListener("click", () => app.analysis && analysisGoto(app.analysis.ucis.length));
+  document.addEventListener("keydown", (e) => {
+    if (app.view !== "analysis" || e.target.closest("input, select, textarea")) return;
+    if (e.key === "ArrowLeft") step(-1);
+    if (e.key === "ArrowRight") step(1);
+  });
+  $("#a-flip").addEventListener("click", () => {
+    app.analysisOrientation = app.analysisOrientation === "w" ? "b" : "w";
+    if (app.analysis) renderAnalysis(app.analysis);
+  });
+  $("#a-hint-toggle").addEventListener("click", () => {
+    app.analysisHint = !app.analysisHint;
+    try { localStorage.setItem("chessengine.hint", app.analysisHint ? "on" : "off"); } catch (_) { /* stockage indisponible */ }
+    renderAnalysisEngine();
+  });
+  $("#a-play-best").addEventListener("click", () => {
+    const info = currentAnalysisInfo();
+    if (info && info.pv_uci.length) analysisMove(info.pv_uci[0]);
+  });
+  $("#a-reset").addEventListener("click", async () => {
+    try {
+      renderAnalysis(await api("/api/analysis/reset", {}));
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+  $("#a-fen-toggle").addEventListener("click", () => {
+    $("#a-fen-row").hidden = !$("#a-fen-row").hidden;
+    if (!$("#a-fen-row").hidden) $("#a-fen").focus();
+  });
+  const loadFen = async () => {
+    try {
+      renderAnalysis(await api("/api/analysis/reset", { fen: $("#a-fen").value }));
+      $("#a-fen-row").hidden = true;
+    } catch (error) {
+      toast(error.message);
+    }
+  };
+  $("#a-fen-load").addEventListener("click", loadFen);
+  $("#a-fen").addEventListener("keydown", (e) => { if (e.key === "Enter") loadFen(); });
+
   let resizeTimer = null;
   window.addEventListener("resize", () => {
     clearTimeout(resizeTimer);
@@ -1601,6 +1951,7 @@ async function start() {
       $("#think").dispatchEvent(new Event("input"));
     }
     renderGame(game);
+    renderAnalysis(await api("/api/analysis"));
     await loadTraining();
     await loadMeasure();
   } catch (error) {
@@ -1608,7 +1959,7 @@ async function start() {
   }
   let saved = null;
   try { saved = localStorage.getItem("chessengine.view"); } catch (_) { /* stockage indisponible */ }
-  setView(["train", "measure"].includes(saved) ? saved : "play");
+  setView(["analysis", "train", "measure"].includes(saved) ? saved : "play");
   connectEvents();
 }
 

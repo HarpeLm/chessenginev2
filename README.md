@@ -3,6 +3,7 @@
 Un moteur d'échecs écrit en Rust, avec une interface web locale pour jouer contre lui et le regarder apprendre.
 
 - **Partie** : joue contre le moteur (clic ou glisser-déposer), avec sa réflexion en direct : évaluation, profondeur, positions par seconde et ligne principale.
+- **Analyse** : tu joues les coups des deux camps. Le moteur analyse en continu la position affichée : une flèche montre le meilleur coup, avec l'évaluation et la suite prévue. Chaque coup joué est jugé (meilleur coup, bon coup, imprécision ?!, erreur ?, gaffe ??), avec le coup que le moteur préférait. Tu peux revenir en arrière (flèches ← →), rejouer une autre suite, charger une position FEN, ou masquer le conseil pour chercher toi-même.
 - **Entraînement** : le moteur joue contre lui-même, ajuste son évaluation, puis la nouvelle version affronte l'ancienne. Graphiques de progression, partie en direct, valeur des pièces et cartes de chaleur qui évoluent pendant l'apprentissage.
 
 ## Lancer le projet (Mac)
@@ -46,6 +47,7 @@ Les poids appris et l'historique d'entraînement sont enregistrés dans le dossi
 | `src/tt.rs` | la table de transposition (le cache des positions déjà analysées) |
 | `src/train.rs` | l'apprentissage par parties contre soi-même (méthode de Texel) |
 | `src/game.rs` | la partie jouée dans le navigateur |
+| `src/analysis.rs` | le mode analyse (les deux camps, conseil du moteur) |
 | `src/server.rs`, `src/app.rs` | le serveur web local et l'état partagé |
 | `src/uci.rs` | le protocole UCI |
 | `web/` | l'interface (HTML, CSS, JavaScript sans framework) |

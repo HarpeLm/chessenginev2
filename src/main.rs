@@ -1,3 +1,4 @@
+mod analysis;
 mod app;
 mod board;
 mod eval;

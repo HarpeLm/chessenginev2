@@ -305,6 +305,9 @@ button { cursor: pointer; }
 .sq.is-dark .coord { color: var(--sq-light); }
 
 .pieces { position: absolute; inset: 0; pointer-events: none; }
+.arrows { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 5; }
+.arrows line { stroke: rgba(205, 184, 131, 0.82); stroke-width: 0.17; stroke-linecap: round; }
+.arrows polygon { fill: rgba(205, 184, 131, 0.82); }
 .piece {
   position: absolute;
   left: 0; top: 0;
@@ -683,6 +686,52 @@ select:disabled { opacity: 0.45; }
 .log .tag-ok { color: var(--gold); }
 .log .tag-no { color: var(--faint); }
 .log-empty td { color: var(--faint); padding: 20px 0; }
+
+/* Analyse */
+.link-button {
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  transition: color 0.2s var(--ease);
+}
+.link-button:hover { color: var(--gold); }
+.engine-panel .panel-head .thinking-dot + .link-button { margin-left: 16px; }
+.panel-head .eyebrow, .link-button, .button-small, .best-line .pv-label { white-space: nowrap; }
+.view-analysis .thinking-dot { width: 40px; }
+.best-line { display: flex; align-items: baseline; gap: 12px; margin: -4px 0 18px; }
+.best-move { flex: 1; font-size: 22px; font-weight: 400; color: var(--gold); }
+.best-move.is-hidden { color: var(--faint); font-size: 14px; }
+.button-small { height: 28px; padding: 0 12px; font-size: 12px; margin-left: auto; }
+.verdict { margin: 0; font-size: 14px; line-height: 1.6; color: var(--text-2); min-height: 44px; }
+.verdict .tag { display: inline-block; margin-right: 8px; font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; }
+.verdict .pending { color: var(--faint); font-size: 12px; }
+.q-best { color: var(--gold); }
+.q-good { color: var(--text-2); }
+.q-inaccuracy { color: #d6b56a; }
+.q-mistake { color: #d08a63; }
+.q-blunder { color: #d0644f; }
+.moves .mark { margin-left: 3px; font-size: 12px; }
+.moves-clickable .mv { cursor: pointer; border-radius: var(--radius); padding: 0 4px; margin-left: -4px; justify-self: start; }
+.moves-clickable .mv:hover { background: var(--bg-3); }
+.moves-clickable .mv.muted { color: var(--faint); cursor: default; }
+.moves-clickable .mv.muted:hover { background: none; }
+.nav-row .button-icon { flex: 1; }
+.fen-row { display: flex; gap: 10px; }
+.fen-row input {
+  flex: 1;
+  min-width: 0;
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text-2);
+  font-size: 12px;
+}
 
 /* Mesure */
 .chart-tall { height: 280px; }
